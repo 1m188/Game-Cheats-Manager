@@ -1,0 +1,318 @@
+# fling-tui — golangci-lint 配置（最严格全覆盖）
+# 版本: v2 (golangci-lint >= 2.0.0)
+# 策略: 最严格全覆盖。启用所有适用的 linter，只排除少数过度限制或不适用于本项目的规则。
+# 执行: golangci-lint run ./...
+# 格式化: golangci-lint fmt ./...
+
+version: "2"
+
+# ==================== Linter 配置 ====================
+linters:
+  # 禁用默认套件，完全显式控制
+  default: none
+
+  enable:
+    # ---- 正确性检查（零容忍） ----
+    - errcheck       # 未检查的错误返回值
+    - govet          # Go 官方可疑构造检查
+    - staticcheck    # 深度静态分析 (SA/QF/S 代码)
+    - unused         # 未使用的变量/函数/导入
+    - ineffassign    # 无效赋值（写了但从未读）
+    # gosimple 已在 v2 中合并入 staticcheck，无需单独启用
+    - bodyclose      # HTTP 响应体未关闭
+    - noctx          # HTTP 请求缺少 Context
+    - nilerr         # 返回 nil error 而非实际 error
+    - nilnesserr     # 对 nil error 调用 Error()
+    - durationcheck  # 时间 duration 乘法错误
+    - copyloopvar    # Go 1.22 循环变量复制问题
+    - makezero       # slice append 非零长度初始化
+    - errorlint      # error 类型比较和 %w 包装检查
+    - mirror         # 避免不必要的 bytes/string 互相转换
+    - intrange       # 推荐使用 range int 语法 (Go 1.22+)
+    - usestdlibvars  # 推荐使用标准库常量代替字面量
+    - nilnil         # 函数同时返回 nil, nil（歧义返回值）
+    - perfsprint     # 格式化函数性能优化
+
+    # ---- 安全与健壮性 ----
+    - gosec          # 安全漏洞检查（密码硬编码、弱随机数等）
+    - gomoddirectives # go.mod 中 replace/retract 指令检查
+    - canonicalheader # HTTP header 规范格式
+    - noinlineerr    # 检查内联错误
+
+    # ---- 代码质量与可维护性 ----
+    - gocritic       # 综合代码审查（100+ 项检查）
+    - revive         # 风格和可维护性（替代 golint）
+    - goconst        # 重复字符串/数字应提取为常量
+    - dupword        # 重复单词检查
+    - misspell       # 拼写错误
+    - unconvert      # 不必要的类型转换
+    - predeclared    # 使用预声明标识符作为名称
+    - reassign       # 函数参数被重新赋值
+    - wastedassign   # 赋值后被覆盖而从未使用
+    - unparam        # 未使用的函数参数
+    - prealloc       # 可预分配容量的 slice
+    - whitespace     # 多余空行/空行缺失检查
+    - godox          # FIXME/TODO 注释检查
+    - wrapcheck      # 外部 error 需用 %w 包装
+    - nolintlint     # nolint 指令规范检查
+    - tagalign       # struct tag 对齐
+    - musttag        # 导出 struct 字段必须有 json/xml tag
+    - importas       # import 别名一致性
+    - forcetypeassert # 强制类型断言检查
+    - ireturn        # 接口返回类型检查
+    - thelper        # testing.TB 辅助函数标记
+    - tparallel      # 表驱动测试中 t.Parallel() 使用
+
+    # ---- 复杂度管理（适度限制） ----
+    - gocyclo        # 圈复杂度
+    - funlen         # 函数长度
+    - gocognit       # 认知复杂度
+    - cyclop         # 基于 AST 的圈复杂度
+    - nestif         # 嵌套 if 深度
+    - nakedret       # 裸 return（长函数中）
+    - maintidx       # 可维护性指数
+
+    # ---- 现代化建议 ----
+    - exptostd       # 检查可以用标准库替代的实验性库
+
+    # ---- 测试相关 ----
+    - testableexamples # 确保 Example 函数可测试
+    - testifylint    # testify 库最佳实践
+
+    # ---- 格式与风格 ----
+    - decorder       # 声明顺序（type → const → var → func）
+    - grouper        # import 分组检查
+
+  # ---- 禁用的 linter（太过限制或不适用） ----
+  # exhaustruct     - 要求所有 struct 字段必须显式赋值，对二进制解析模型太严格
+  # exhaustive      - 要求所有 switch 枚举全覆盖，我们已有 default 分支
+  # gochecknoglobals - 全局变量在 CLI 中是合理模式
+  # gochecknoinits  - init() 函数有时必要
+  # varnamelen      - 变量名长度限制过于主观
+  # testpackage     - 强制 _test 包分离，非必要
+  # gochecksumtype  - 需要 sum type 声明，项目不适用
+  # nonamedreturns  - 具名返回值在某些场景下更清晰
+  # nlreturn        - 要求 return 前后必须有空行
+  # wsl             - 空白行规则过于激进
+  # lll             - 行宽限制（120 字符），中文注释容易触发
+  # mnd             - 魔数检查，二进制解析中数字无处不在
+  # forbidigo       - 禁止特定标识符，过度限制
+  # paralleltest    - 强制并行测试，不是所有测试都适合
+  # loggercheck     - 日志库检查，项目当前未使用结构化日志
+  # promlinter      - Prometheus 指标检查，不适用
+  # protogetter     - Protobuf 相关，不适用
+  # rowserrcheck    - SQL rows.Err()，不适用
+  # sqlclosecheck   - SQL 连接关闭，不适用
+  # zerologlint     - zerolog 日志库，不适用
+
+  settings:
+    # ---- errcheck: 检查所有错误 ----
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+    # ---- goconst: 重复字面量 ----
+    goconst:
+      min-len: 3            # 最少字符数
+      min-occurrences: 3    # 最少出现次数
+      numbers: true         # 同时检查数字
+
+    # ---- gocritic: 全部启用 ----
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - experimental
+        - opinionated
+
+    # ---- gocyclo: 圈复杂度上限 ----
+    gocyclo:
+      min-complexity: 15
+
+    # ---- funlen: 函数长度上限 ----
+    funlen:
+      lines: 80
+      statements: 40
+
+    # ---- gocognit: 认知复杂度上限 ----
+    gocognit:
+      min-complexity: 25
+
+    # ---- cyclop: AST 圈复杂度 ----
+    cyclop:
+      max-complexity: 15
+
+    # ---- nestif: 最大嵌套深度 ----
+    nestif:
+      min-complexity: 5
+
+    # ---- godox: 必须处理所有 TODO/FIXME ----
+    godox:
+      keywords:
+        - FIXME
+        - TODO        # 允许保留但会报警
+        - BUG
+        - HACK
+
+    # ---- revive: 启用全部规则 ----
+    revive:
+      enable-all-rules: true
+      confidence: 0.8
+      rules:
+        # 以下规则与当前项目约定冲突，单独禁用
+        - name: exported
+          disabled: false
+        - name: package-comments
+          disabled: false
+        - name: add-constant
+          disabled: true    # 触发过于频繁
+          arguments:
+            - maxLitCount: "3"
+        - name: line-length-limit
+          disabled: true    # 中文注释容易超长
+        - name: max-public-structs
+          disabled: true    # 对包大小没限制
+        - name: file-header
+          disabled: true    # 不需要文件头模板
+        - name: cognitive-complexity
+          disabled: true    # 由 gocognit 单独处理
+        - name: cyclomatic
+          disabled: true    # 由 gocyclo 单独处理
+        - name: function-length
+          disabled: true    # 由 funlen 单独处理
+
+    # ---- wrapcheck: 外部包 error 必须 %w 包装 ----
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - .Fprintf(
+        - .New(
+
+    # ---- misspell: 拼写检查 ----
+    misspell:
+      locale: US
+
+    # ---- gosec: 安全检查 ----
+    gosec:
+      excludes:
+        - G104    # 不检查未处理的错误（由 errcheck 处理）
+        - G307    # 不检查 Defer 中文件关闭错误
+
+    # ---- gomoddirectives: 禁止本地 replace ----
+    gomoddirectives:
+      replace-local: true
+
+    # ---- musttag: 导出结构体必须标注 json tag ----
+    musttag:
+      functions:
+        - name: json.Marshal
+        - name: json.Unmarshal
+        - name: json.NewEncoder
+        - name: json.NewDecoder
+
+    # ---- ireturn: 接口返回检查 ----
+    ireturn:
+      allow:
+        - error
+        - io.Reader
+        - io.Writer
+        - io.ReadCloser
+        - tea.Model
+
+    # ---- decorder: 声明顺序 ----
+    decorder:
+      disable-dec-order-check: false
+      disable-dec-num-check: false
+      disable-init-func-first-check: false
+      dec-order:
+        - type
+        - const
+        - var
+        - func
+
+    # ---- importas: import 别名必须一致 ----
+    importas:
+      no-unaliased: false
+      alias:
+    # ---- prealloc: slice 预分配 ----
+    prealloc:
+      simple: false
+      range-loops: true
+      for-loops: true
+
+    # ---- maintidx: 可维护性指数 ----
+    maintidx:
+      under: 20    # 低于 20 时需要重构
+
+    # ---- unparam: 未使用参数 ----
+    unparam:
+      check-exported: true
+
+    # ---- testifylint: 测试规范 ----
+    testifylint:
+      enable-all: true
+
+# ==================== 排除规则 ====================
+exclusions:
+  generated: lax
+  rules:
+    # 测试文件中允许未检查错误
+    - path: _test\\.go
+      linters:
+        - errcheck
+        - gosec
+        - wrapcheck
+        - funlen
+        - gocognit
+        - gocyclo
+        - nestif
+        - maintidx
+        - cyclop
+        - unparam
+      text: ".*"
+
+    # 测试文件中的 fmt.Fprintf 不需要检查
+    - path: _test\\.go
+      linters:
+        - errcheck
+    # CLI 入口允许 os.Exit
+    - path: cmd/
+      linters:
+        - gosec
+      text: "os.Exit"
+
+    # 生成的 protobuf 文件
+    - path: ".*\\.pb\\.go"
+      linters:
+        - all
+
+# ==================== 运行控制 ====================
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+
+# ==================== 输出配置 ====================
+output:
+  formats:
+    text:
+      path: stdout
+  print-issued-lines: true
+  print-linter-name: true
+  sort-results: true
+
+# ==================== 格式化器配置（linter 的一部分） ====================
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes: fling-tui
