@@ -261,7 +261,7 @@ exclusions:
   generated: lax
   rules:
     # 测试文件中允许未检查错误
-    - path: _test\\.go
+    - path: .*_test\\.go
       linters:
         - errcheck
         - gosec
@@ -273,10 +273,11 @@ exclusions:
         - maintidx
         - cyclop
         - unparam
+        - noinlineerr
       text: ".*"
 
     # 测试文件中的 fmt.Fprintf 不需要检查
-    - path: _test\\.go
+    - path: .*_test\\.go
       linters:
         - errcheck
     # CLI 入口允许 os.Exit
