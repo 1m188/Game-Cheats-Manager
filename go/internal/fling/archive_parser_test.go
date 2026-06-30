@@ -1,6 +1,4 @@
 // Package fling 提供 FLiNG 修改器网站的爬虫、搜索和下载功能。
-//
-//nolint:goconst // 测试 fixture 中重复字符串为正常测试模式
 package fling
 
 import (
@@ -28,10 +26,10 @@ func TestParseArchive_完整解析测试(t *testing.T) {
 		t.Fatal("解析结果不应为空")
 	}
 
-	// Then: "DREDGE" 出现在结果中，URL 正确
+	// Then: DREDGE 出现在结果中（含版本号），URL 正确
 	foundDredge := false
 	for _, tr := range trainers {
-		if tr.GameName != "DREDGE" {
+		if tr.GameName != "DREDGE v1.2.0" {
 			continue
 		}
 		foundDredge = true
@@ -119,7 +117,7 @@ func TestParseArchive_BrightMemory特殊处理测试(t *testing.T) {
 	}
 }
 
-// TestParseArchive_版本号去除测试 — 验证版本后缀被正确去除。
+// TestParseArchive_版本号保留测试 — 验证版本信息保留在 GameName 中，下划线被替换。
 func TestParseArchive_版本号去除测试(t *testing.T) {
 	// Given: 含各种版本后缀的 HTML fixture
 	html, err := os.ReadFile("../../testdata/fling_archive.html")
@@ -133,12 +131,12 @@ func TestParseArchive_版本号去除测试(t *testing.T) {
 		t.Fatalf("ParseArchiveHTML 返回错误: %v", err)
 	}
 
-	// Then: 版本号版本后缀被去除，下划线被替换
+	// Then: 版本号保留在 GameName 中，下划线被替换为冒号空格
 	checks := map[string]bool{
-		"Elden: Ring":                 true, // "Elden_Ring v1.10" → 去版本 → 下划线转冒号
-		"Balatro":                     true, // "Balatro 1.0.3" → 去除 " 1.0.3"
-		"Hades: II":                   true, // "Hades_II Early Access" → 去版本 → 下划线转冒号
-		"Sekiro: Shadows: Die: Twice": true, // "Sekiro_Shadows_Die_Twice" → 下划线全转冒号空格
+		"Elden: Ring v1.10":                 true,
+		"Balatro 1.0.3":                     true,
+		"Hades: II Early Access v0.9":       true,
+		"Sekiro: Shadows: Die: Twice":       true,
 	}
 
 	for _, tr := range trainers {

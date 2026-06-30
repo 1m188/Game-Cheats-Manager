@@ -47,13 +47,13 @@ var (
 func ParseArchiveHTML(html []byte) ([]Trainer, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(html))
 	if err != nil {
-		return nil, fmt.Errorf("goquery 解析 HTML 失败: %w", err)
+		return nil, fmt.Errorf("解析错误: goquery 解析 HTML 失败: %w", err)
 	}
 
 	baseURL, err := url.Parse("https://archive.flingtrainer.com/")
 	if err != nil {
 		// 硬编码 baseURL 不应该解析失败
-		return nil, fmt.Errorf("解析 fling_archive 基础 URL 失败: %w", err)
+		return nil, fmt.Errorf("解析错误: 解析 fling_archive 基础 URL 失败: %w", err)
 	}
 
 	trainers := make([]Trainer, 0)
@@ -63,18 +63,22 @@ func ParseArchiveHTML(html []byte) ([]Trainer, error) {
 		// 1. rawTrainerName = link.get_text()
 		rawTrainerName := link.Text()
 
-		// 2. parsedTrainerName = re.sub(versionRe, '', rawTrainerName).replace("_", ": ")
-		parsedTrainerName := versionRemovalRe.ReplaceAllString(rawTrainerName, "")
-		gameName := strings.ReplaceAll(parsedTrainerName, "_", ": ")
+		// 2. 保留去除版本后缀的干净名，用于忽略列表匹配
+		strippedName := versionRemovalRe.ReplaceAllString(rawTrainerName, "")
+		strippedName = strings.ReplaceAll(strippedName, "_", ": ")
+		strippedName = strings.TrimSpace(strippedName)
+
+		// 3. GameName 保留版本信息（仅替换 _ → : ），便于搜索结果中区分不同版本
+		gameName := strings.ReplaceAll(rawTrainerName, "_", ": ")
 		gameName = strings.TrimSpace(gameName)
 
-		// 3. 特殊处理 "Bright.Memory.Episode.1" → "Bright Memory: Episode 1"
-		if gameName == "Bright.Memory.Episode.1" {
+		// 4. 特殊处理 "Bright.Memory.Episode.1" → "Bright Memory: Episode 1"
+		if strippedName == "Bright.Memory.Episode.1" {
 			gameName = "Bright Memory: Episode 1"
 		}
 
-		// 4. 跳过忽略列表中的游戏
-		if ignoredTrainers[gameName] {
+		// 5. 跳过忽略列表中的游戏（使用去除版本后缀后的名判断）
+		if ignoredTrainers[strippedName] {
 			return
 		}
 

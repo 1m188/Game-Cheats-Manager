@@ -3,6 +3,7 @@ package fling
 
 import (
 	"archive/zip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,17 +14,18 @@ import (
 const (
 	testFileNameExe      = "DREDGE Trainer.exe"
 	testFileNameReadme   = "readme.txt"
+	testBodyReadme       = "just a readme"
 	testMsgAntivirusHint = "杀毒"
 )
 
 // createTestZip 在 zipPath 创建一个测试用 .zip 文件。
 // entries 是 map[文件名]内容，用于控制压缩包内包含的文件。
 func createTestZip(zipPath string, entries map[string]string) error {
-	f, err := os.Create(zipPath)
+	f, err := os.Create(zipPath) //nolint:gosec // 测试辅助函数，路径由测试框架控制
 	if err != nil {
-		return err
+		return fmt.Errorf("创建测试 zip 文件失败: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() //nolint:errcheck // defer Close in test helper
 
 	w := zip.NewWriter(f)
 	for name, body := range entries {
@@ -34,231 +36,296 @@ func createTestZip(zipPath string, entries map[string]string) error {
 		header.SetMode(0o644)
 		writer, err := w.CreateHeader(header)
 		if err != nil {
-			return err
+			return fmt.Errorf("创建 zip 条目失败: %w", err)
 		}
-		if _, err := writer.Write([]byte(body)); err != nil {
-			return err
+		_, writeErr := writer.Write([]byte(body))
+		if writeErr != nil {
+			return fmt.Errorf("写入 zip 条目内容失败: %w", writeErr)
 		}
 	}
-	return w.Close()
+	err = w.Close()
+	if err != nil {
+		return fmt.Errorf("关闭 zip writer 失败: %w", err)
+	}
+	return nil
 }
 
-// TestExtractAndFindTrainer 测试解压压缩包并定位修改器 .exe 文件。
-func TestExtractAndFindTrainer(t *testing.T) {
+// extractTestHelper 创建测试 zip 并调用 ExtractAndFindTrainer，返回结果和错误。
+// entries 为空时创建空 zip 文件。
+func extractTestHelper(t *testing.T, entries map[string]string) ([]string, error) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "test.zip")
+	err := createTestZip(zipPath, entries)
+	fatalIfErr(t, "创建测试 zip 失败", err)
+
+	destDir := filepath.Join(tmpDir, "extracted")
+	return ExtractAndFindTrainer(zipPath, destDir)
+}
+
+// extractTestToDir 创建测试 zip 并解压到指定 destDir。
+// entries 为空时创建空 zip 文件。
+func extractTestToDir(t *testing.T, entries map[string]string, destDir string) ([]string, error) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "test.zip")
+	err := createTestZip(zipPath, entries)
+	fatalIfErr(t, "创建测试 zip 失败", err)
+
+	return ExtractAndFindTrainer(zipPath, destDir)
+}
+
+// fatalIfErr 是 t.Fatalf 的简洁包装。
+func fatalIfErr(t *testing.T, context string, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("%s: %v", context, err)
+	}
+}
+
+// requireError 要求 err 非 nil 且包含特定关键词。
+func requireError(t *testing.T, got []string, err error, keyword string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("预期错误，但成功返回: %v", got)
+	}
+	if !strings.Contains(err.Error(), keyword) {
+		t.Errorf("错误信息应包含 '%s'，实际: '%s'", keyword, err.Error())
+	}
+}
+
+// TestExtractAndFindTrainer_withTrainerExe 测试含 trainer .exe 的正常解压。
+func TestExtractAndFindTrainer_withTrainerExe(t *testing.T) {
 	t.Parallel()
 
-	t.Run("含trainer_exe正常解压并返回", func(t *testing.T) {
-		// Given: 一个包含 "DREDGE Trainer.exe" 和 "readme.txt" 的 .zip 文件
-		tmpDir := t.TempDir()
-		zipPath := filepath.Join(tmpDir, "test.zip")
+	entries := map[string]string{
+		testFileNameExe:    "mock exe content",
+		testFileNameReadme: testBodyReadme,
+	}
+	got, err := extractTestHelper(t, entries)
 
-		entries := map[string]string{
-			testFileNameExe:    "mock exe content",
-			testFileNameReadme: "just a readme",
-		}
-		if err := createTestZip(zipPath, entries); err != nil {
-			t.Fatalf("创建测试 zip 失败: %v", err)
-		}
+	if err != nil {
+		t.Fatalf("预期成功，但返回错误: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("预期 1 个 trainer 文件，得到 %d: %v", len(got), got)
+	}
+	if got[0] != testFileNameExe {
+		t.Errorf("预期 '%s'，得到 '%s'", testFileNameExe, got[0])
+	}
+}
 
-		destDir := filepath.Join(tmpDir, "extracted")
+// TestExtractAndFindTrainer_noTrainerExe 测试无 trainer .exe 返回错误。
+func TestExtractAndFindTrainer_noTrainerExe(t *testing.T) {
+	t.Parallel()
 
-		// When: 解压并查找 trainer .exe
-		got, err := ExtractAndFindTrainer(zipPath, destDir)
+	entries := map[string]string{
+		testFileNameReadme: testBodyReadme,
+		"somefile.dll":     "library",
+	}
+	got, err := extractTestHelper(t, entries)
+	requireError(t, got, err, testMsgAntivirusHint)
+}
 
-		// Then: 应返回仅包含 .exe 文件的列表，不含 readme.txt
-		if err != nil {
-			t.Fatalf("预期成功，但返回错误: %v", err)
-		}
-		if len(got) != 1 {
-			t.Fatalf("预期 1 个 trainer 文件，得到 %d: %v", len(got), got)
-		}
-		if got[0] != testFileNameExe {
-			t.Errorf("预期 '%s'，得到 '%s'", testFileNameExe, got[0])
-		}
+// TestExtractAndFindTrainer_exeButNoTrainer 测试 .exe 存在但无 trainer 关键字。
+func TestExtractAndFindTrainer_exeButNoTrainer(t *testing.T) {
+	t.Parallel()
 
-		// 验证文件确实解压到目标目录
-		if _, statErr := os.Stat(filepath.Join(destDir, testFileNameExe)); os.IsNotExist(statErr) {
-			t.Errorf("预期 '%s' 存在于 %s，但不存在", testFileNameExe, destDir)
-		}
-	})
+	entries := map[string]string{
+		"setup.exe":        "setup program",
+		testFileNameReadme: "docs",
+	}
+	got, err := extractTestHelper(t, entries)
+	requireError(t, got, err, testMsgAntivirusHint)
+}
 
-	t.Run("无trainer_exe返回错误", func(t *testing.T) {
-		// Given: 一个包含 .txt 和 .dll 但没有 .exe 的 .zip 文件
-		tmpDir := t.TempDir()
-		zipPath := filepath.Join(tmpDir, "noexe.zip")
+// TestExtractAndFindTrainer_emptyArchive 测试空压缩包返回错误。
+func TestExtractAndFindTrainer_emptyArchive(t *testing.T) {
+	t.Parallel()
 
-		entries := map[string]string{
-			testFileNameReadme: "just a readme",
-			"somefile.dll":     "library",
-		}
-		if err := createTestZip(zipPath, entries); err != nil {
-			t.Fatalf("创建测试 zip 失败: %v", err)
-		}
+	got, err := extractTestHelper(t, map[string]string{})
+	requireError(t, got, err, testMsgAntivirusHint)
+}
 
-		destDir := filepath.Join(tmpDir, "extracted")
+// TestExtractAndFindTrainer_caseInsensitive 测试 trainer 关键字大小写不敏感。
+func TestExtractAndFindTrainer_caseInsensitive(t *testing.T) {
+	t.Parallel()
 
-		// When: 解压并查找 trainer .exe
-		got, err := ExtractAndFindTrainer(zipPath, destDir)
+	entries := map[string]string{
+		"GAMENAME TRAINER.EXE": "mock exe",
+	}
+	got, err := extractTestHelper(t, entries)
 
-		// Then: 应返回包含"杀毒软件"关键词的错误
-		if err == nil {
-			t.Fatalf("预期错误，但成功返回: %v", got)
-		}
-		if err.Error() == "" {
-			t.Fatal("错误信息不应为空")
-		}
-		// 对标 Python download_trainers_thread.py:277 错误信息
-		if !strings.Contains(err.Error(), testMsgAntivirusHint) {
-			t.Errorf("错误信息应包含 '%s'，实际: '%s'", testMsgAntivirusHint, err.Error())
-		}
-	})
+	if err != nil {
+		t.Fatalf("预期成功，但返回错误: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("预期 1 个 trainer 文件，得到 %d: %v", len(got), got)
+	}
+	if got[0] != "GAMENAME TRAINER.EXE" {
+		t.Errorf("预期 'GAMENAME TRAINER.EXE'，得到 '%s'", got[0])
+	}
+}
 
-	t.Run("zip内有exe但无trainer关键字仍返回错误", func(t *testing.T) {
-		// Given: 一个包含"setup.exe"但不含"trainer"关键字的 .zip 文件
-		tmpDir := t.TempDir()
-		zipPath := filepath.Join(tmpDir, "setupexe.zip")
+// TestExtractAndFindTrainer_multipleExes 测试多个 trainer .exe 全部返回。
+func TestExtractAndFindTrainer_multipleExes(t *testing.T) {
+	t.Parallel()
 
-		entries := map[string]string{
-			"setup.exe":        "setup program",
-			testFileNameReadme: "docs",
-		}
-		if err := createTestZip(zipPath, entries); err != nil {
-			t.Fatalf("创建测试 zip 失败: %v", err)
-		}
+	entries := map[string]string{
+		testFileNameExe:             "mock 1",
+		"DREDGE v1.0.2 Trainer.exe": "mock 2",
+		testFileNameReadme:          "docs",
+	}
+	got, err := extractTestHelper(t, entries)
 
-		destDir := filepath.Join(tmpDir, "extracted")
+	if err != nil {
+		t.Fatalf("预期成功，但返回错误: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("预期 2 个 trainer 文件，得到 %d: %v", len(got), got)
+	}
+}
 
-		// When: 解压并查找 trainer .exe
-		got, err := ExtractAndFindTrainer(zipPath, destDir)
+// TestExtractAndFindTrainer_autoCreateDir 测试目标目录不存在时自动创建。
+func TestExtractAndFindTrainer_autoCreateDir(t *testing.T) {
+	t.Parallel()
 
-		// Then: .exe 存在但文件名不包含 "trainer"，应返回错误并提示杀毒软件
-		if err == nil {
-			t.Fatalf("预期错误，但成功返回: %v", got)
-		}
-		if !strings.Contains(err.Error(), testMsgAntivirusHint) {
-			t.Errorf("错误信息应包含 '%s'，实际: '%s'", testMsgAntivirusHint, err.Error())
-		}
-	})
+	tmpDir := t.TempDir()
+	entries := map[string]string{"Game Trainer.exe": "mock"}
+	destDir := filepath.Join(tmpDir, "nested", "extracted")
 
-	t.Run("空压缩包返回错误", func(t *testing.T) {
-		// Given: 一个没有任何条目的空 .zip 文件
-		tmpDir := t.TempDir()
-		zipPath := filepath.Join(tmpDir, "empty.zip")
+	got, err := extractTestToDir(t, entries, destDir)
 
-		entries := map[string]string{} // 空
-		if err := createTestZip(zipPath, entries); err != nil {
-			t.Fatalf("创建测试 zip 失败: %v", err)
-		}
+	if err != nil {
+		t.Fatalf("预期成功，但返回错误: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("预期 1 个 trainer 文件，得到 %d: %v", len(got), got)
+	}
+}
 
-		destDir := filepath.Join(tmpDir, "extracted")
+// TestExtractAndFindTrainer_nonexistentZip 测试不存在的 zip 文件返回错误。
+func TestExtractAndFindTrainer_nonexistentZip(t *testing.T) {
+	t.Parallel()
 
-		// When: 解压空压缩包
-		got, err := ExtractAndFindTrainer(zipPath, destDir)
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "does_not_exist.zip")
+	destDir := filepath.Join(tmpDir, "extracted")
 
-		// Then: 应返回包含"杀毒"关键词的错误
-		if err == nil {
-			t.Fatalf("预期错误，但成功返回: %v", got)
-		}
-		if !strings.Contains(err.Error(), testMsgAntivirusHint) {
-			t.Errorf("错误信息应包含 '%s'，实际: '%s'", testMsgAntivirusHint, err.Error())
-		}
-	})
+	got, err := ExtractAndFindTrainer(zipPath, destDir)
 
-	t.Run("trainer关键字大小写不敏感", func(t *testing.T) {
-		// Given: 一个包含 "GAMENAME TRAINER.EXE"（大写）的 .zip 文件
-		tmpDir := t.TempDir()
-		zipPath := filepath.Join(tmpDir, "uppercase.zip")
+	if err == nil {
+		t.Fatalf("预期错误，但成功返回: %v", got)
+	}
+}
 
-		entries := map[string]string{
-			"GAMENAME TRAINER.EXE": "mock exe",
-		}
-		if err := createTestZip(zipPath, entries); err != nil {
-			t.Fatalf("创建测试 zip 失败: %v", err)
-		}
+// TestExtractAndFindTrainer_fileStatAfterExtract 验证文件解压到目标目录后确实存在。
+func TestExtractAndFindTrainer_fileStatAfterExtract(t *testing.T) {
+	t.Parallel()
 
-		destDir := filepath.Join(tmpDir, "extracted")
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "test.zip")
+	entries := map[string]string{
+		testFileNameExe:    "mock exe content",
+		testFileNameReadme: testBodyReadme,
+	}
+	err := createTestZip(zipPath, entries)
+	fatalIfErr(t, "创建测试 zip 失败", err)
 
-		// When: 解压并查找 trainer .exe
-		got, err := ExtractAndFindTrainer(zipPath, destDir)
+	destDir := filepath.Join(tmpDir, "extracted")
+	_, err = ExtractAndFindTrainer(zipPath, destDir)
+	fatalIfErr(t, "解压失败", err)
 
-		// Then: 大小写不敏感匹配应成功
-		if err != nil {
-			t.Fatalf("预期成功，但返回错误: %v", err)
-		}
-		if len(got) != 1 {
-			t.Fatalf("预期 1 个 trainer 文件，得到 %d: %v", len(got), got)
-		}
-		if got[0] != "GAMENAME TRAINER.EXE" {
-			t.Errorf("预期 'GAMENAME TRAINER.EXE'，得到 '%s'", got[0])
-		}
-	})
+	_, statErr := os.Stat(filepath.Join(destDir, testFileNameExe))
+	if os.IsNotExist(statErr) {
+		t.Errorf("预期 '%s' 存在于 %s，但不存在", testFileNameExe, destDir)
+	}
+}
 
-	t.Run("多个trainer_exe文件全部返回", func(t *testing.T) {
-		// Given: 一个包含多个 trainer .exe 的 .zip 文件
-		tmpDir := t.TempDir()
-		zipPath := filepath.Join(tmpDir, "multi.zip")
+// createDirectExe 创建一个以 MZ 头开头的模拟 .exe 文件。
+func createDirectExe(path string, content string) error {
+	f, err := os.Create(path) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
 
-		entries := map[string]string{
-			testFileNameExe:             "mock 1",
-			"DREDGE v1.0.2 Trainer.exe": "mock 2",
-			testFileNameReadme:          "docs",
-		}
-		if err := createTestZip(zipPath, entries); err != nil {
-			t.Fatalf("创建测试 zip 失败: %v", err)
-		}
+	// MZ magic + content
+	_, err = f.Write([]byte{0x4D, 0x5A, 0x90, 0x00})
+	if err != nil {
+		return err
+	}
+	_, err = f.Write([]byte(content))
+	return err
+}
 
-		destDir := filepath.Join(tmpDir, "extracted")
+// TestDetectFormat_zipMagic 测试 ZIP 魔术字节检测。
+func TestDetectFormat_zipMagic(t *testing.T) {
+	t.Parallel()
 
-		// When: 解压并查找 trainer .exe
-		got, err := ExtractAndFindTrainer(zipPath, destDir)
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "test.zip")
+	entries := map[string]string{"a.txt": "hello"}
+	fatalIfErr(t, "创建测试 zip", createTestZip(p, entries))
 
-		// Then: 两个 trainer .exe 都应返回，readme.txt 不应返回
-		if err != nil {
-			t.Fatalf("预期成功，但返回错误: %v", err)
-		}
-		if len(got) != 2 {
-			t.Fatalf("预期 2 个 trainer 文件，得到 %d: %v", len(got), got)
-		}
-	})
+	got := DetectFormat(p)
+	if got != "zip" {
+		t.Errorf("DetectFormat(zip) = %q, want \"zip\"", got)
+	}
+}
 
-	t.Run("目标目录不存在时自动创建", func(t *testing.T) {
-		// Given: 目标目录的子路径不存在
-		tmpDir := t.TempDir()
-		zipPath := filepath.Join(tmpDir, "test.zip")
+// TestDetectFormat_exeDirect 测试直接 .exe 文件（MZ 头）检测。
+func TestDetectFormat_exeDirect(t *testing.T) {
+	t.Parallel()
 
-		entries := map[string]string{
-			"Game Trainer.exe": "mock",
-		}
-		if err := createTestZip(zipPath, entries); err != nil {
-			t.Fatalf("创建测试 zip 失败: %v", err)
-		}
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "trainer.exe")
+	err := os.WriteFile(p, []byte{0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00}, 0o644)
+	fatalIfErr(t, "创建 exe 文件", err)
 
-		destDir := filepath.Join(tmpDir, "nested", "extracted")
+	got := DetectFormat(p)
+	if got != "exe" {
+		t.Errorf("DetectFormat(exe) = %q, want \"exe\"", got)
+	}
+}
 
-		// When: 解压到尚不存在的目录
-		got, err := ExtractAndFindTrainer(zipPath, destDir)
+// TestDetectFormat_unknown 测试未知格式。
+func TestDetectFormat_unknown(t *testing.T) {
+	t.Parallel()
 
-		// Then: 应自动创建目录并成功解压
-		if err != nil {
-			t.Fatalf("预期成功，但返回错误: %v", err)
-		}
-		if len(got) != 1 {
-			t.Fatalf("预期 1 个 trainer 文件，得到 %d: %v", len(got), got)
-		}
-	})
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "unknown.bin")
+	err := os.WriteFile(p, []byte("Hello World!"), 0o644)
+	fatalIfErr(t, "创建未知文件", err)
 
-	t.Run("不存在的zip文件返回错误", func(t *testing.T) {
-		// Given: 一个不存在的 .zip 路径
-		tmpDir := t.TempDir()
-		zipPath := filepath.Join(tmpDir, "does_not_exist.zip")
-		destDir := filepath.Join(tmpDir, "extracted")
+	got := DetectFormat(p)
+	if got != "" {
+		t.Errorf("DetectFormat(unknown) = %q, want \"\"", got)
+	}
+}
 
-		// When: 尝试解压不存在的文件
-		got, err := ExtractAndFindTrainer(zipPath, destDir)
+// TestExtractAndFindTrainer_directExe 测试直接 .exe 文件（非压缩包）被正确识别为 trainer。
+func TestExtractAndFindTrainer_directExe(t *testing.T) {
+	t.Parallel()
 
-		// Then: 应返回错误
-		if err == nil {
-			t.Fatalf("预期错误，但成功返回: %v", got)
-		}
-	})
+	tmpDir := t.TempDir()
+	exePath := filepath.Join(tmpDir, "DREDGE Trainer.exe")
+	err := createDirectExe(exePath, "pretend this is a PE executable")
+	fatalIfErr(t, "创建直接 exe 文件", err)
+
+	destDir := filepath.Join(tmpDir, "extracted")
+	got, err := ExtractAndFindTrainer(exePath, destDir)
+
+	if err != nil {
+		t.Fatalf("预期成功，但返回错误: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("预期 1 个 trainer 文件，得到 %d: %v", len(got), got)
+	}
+	// 验证文件确实被拷贝到目标目录
+	copiedPath := filepath.Join(destDir, "DREDGE Trainer.exe")
+	_, statErr := os.Stat(copiedPath)
+	if os.IsNotExist(statErr) {
+		t.Errorf("直接 exe 应被拷贝到 %s，但不存在", copiedPath)
+	}
 }
