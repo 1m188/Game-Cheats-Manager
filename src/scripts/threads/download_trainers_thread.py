@@ -6,8 +6,6 @@ import subprocess
 import time
 import traceback
 
-from bs4 import BeautifulSoup
-
 from config import *
 from threads.download_base_thread import DownloadBaseThread
 
@@ -24,13 +22,6 @@ class DownloadTrainersThread(DownloadBaseThread):
 
     def run(self):
         try:
-            self.message.emit(tr("Checking for internet connection..."), None)
-            if not self.is_internet_connected():
-                self.message.emit(tr("No internet connection, download failed."), "failure")
-                time.sleep(self.download_finish_delay)
-                self.finished.emit(1)
-                return
-
             try:
                 if os.path.exists(DOWNLOAD_TEMP_DIR):
                     shutil.rmtree(DOWNLOAD_TEMP_DIR)
@@ -113,6 +104,44 @@ class DownloadTrainersThread(DownloadBaseThread):
             self.message.emit(tr("An error occurred while downloading trainer: ") + str(e), "failure")
             time.sleep(self.download_finish_delay)
             self.finished.emit(1)
+
+    @staticmethod
+    def format_request_error(error):
+        message = tr("Internet request failed.")
+        pending = [error]
+        visited = set()
+
+        while pending:
+            current = pending.pop(0)
+            if not isinstance(current, BaseException) or id(current) in visited:
+                continue
+            visited.add(id(current))
+
+            response = getattr(current, "response", None)
+            status_code = getattr(response, "status_code", None)
+            if status_code is not None:
+                return f"{message} (HTTP {status_code})"
+
+            winerror = getattr(current, "winerror", None)
+            if winerror is not None:
+                return f"{message} (WinError {winerror})"
+
+            errno = getattr(current, "errno", None)
+            if errno is not None:
+                return f"{message} (errno {errno})"
+
+            pending.extend(
+                nested
+                for nested in (
+                    getattr(current, "reason", None),
+                    current.__cause__,
+                    current.__context__,
+                    *current.args,
+                )
+                if isinstance(nested, BaseException)
+            )
+
+        return message
 
     def modify_fling_settings(self, removeBgMusic):
         # replace bg music in Documents folder
@@ -206,37 +235,14 @@ class DownloadTrainersThread(DownloadBaseThread):
         # Download trainer
         self.message.emit(tr("Downloading..."), "download")
         try:
-            targetUrl = selected_trainer["url"]
+            targetUrl = self.get_signed_download_url(selected_trainer["url"], raise_errors=True)
 
-            # Additional trainer file extraction for trainers from main site
-            if settings["flingDownloadServer"] == "official" and not self.update_entry:
-                if selected_trainer['origin'] == "fling_main":
-                    page_content = self.get_webpage_content(targetUrl)
-                    trainerPage = BeautifulSoup(page_content, 'html.parser')
-                    targetObj = trainerPage.find(lambda tag: tag.get('target') == '_self' and 'flingtrainer.com' in tag.get('href'))
-                    if not targetObj:
-                        raise Exception(tr("Failed to find trainer download link."))
-                    targetUrl = targetObj.get("href")
-                    div_entry = trainerPage.find('div', class_='entry')
-                    if div_entry:
-                        pattern = r'options.*game\s*version.*last\s*updated:\s*(\d{4}\.[0-1]?\d\.[0-3]?\d)'
-                        match = re.search(pattern, div_entry.get_text(separator=' ', strip=True), re.IGNORECASE)
-                        if match:
-                            version = match.group(1)
-                    if not version:
-                        raise Exception(tr("Failed to find trainer version."))
-                    selected_trainer["version"] = version
-
-            # Download trainers from gcm server
-            elif settings["flingDownloadServer"] == "gcm" or self.update_entry:
-                targetUrl = self.get_signed_download_url(targetUrl)
-
-            trainerTemp = self.request_download(targetUrl, DOWNLOAD_TEMP_DIR)
+            trainerTemp = self.request_download(targetUrl, DOWNLOAD_TEMP_DIR, raise_errors=True)
             if not trainerTemp:
                 raise Exception(tr("Internet request failed."))
 
         except Exception as e:
-            self.message.emit(tr("An error occurred while downloading trainer: ") + str(e), "failure")
+            self.message.emit(self.format_request_error(e), "failure")
             time.sleep(self.download_finish_delay)
             self.finished.emit(1)
             return False
@@ -350,13 +356,13 @@ class DownloadTrainersThread(DownloadBaseThread):
         self.message.emit(tr("Downloading..."), "download")
         extractedContentPath = os.path.join(DOWNLOAD_TEMP_DIR, "extracted")
         try:
-            signed_url = self.get_signed_download_url(selected_trainer['url'])
-            trainerTemp = self.request_download(signed_url, DOWNLOAD_TEMP_DIR)
+            signed_url = self.get_signed_download_url(selected_trainer['url'], raise_errors=True)
+            trainerTemp = self.request_download(signed_url, DOWNLOAD_TEMP_DIR, raise_errors=True)
             if not trainerTemp:
                 raise Exception(tr("Internet request failed."))
 
         except Exception as e:
-            self.message.emit(tr("An error occurred while downloading trainer: ") + str(e), "failure")
+            self.message.emit(self.format_request_error(e), "failure")
             time.sleep(self.download_finish_delay)
             self.finished.emit(1)
             return False
@@ -553,13 +559,13 @@ class DownloadTrainersThread(DownloadBaseThread):
         self.message.emit(tr("Downloading..."), "download")
         extractedContentPath = os.path.join(DOWNLOAD_TEMP_DIR, "extracted")
         try:
-            signed_url = self.get_signed_download_url(selected_trainer['url'])
-            trainerTemp = self.request_download(signed_url, DOWNLOAD_TEMP_DIR)
+            signed_url = self.get_signed_download_url(selected_trainer['url'], raise_errors=True)
+            trainerTemp = self.request_download(signed_url, DOWNLOAD_TEMP_DIR, raise_errors=True)
             if not trainerTemp:
                 raise Exception(tr("Internet request failed."))
 
         except Exception as e:
-            self.message.emit(tr("An error occurred while downloading trainer: ") + str(e), "failure")
+            self.message.emit(self.format_request_error(e), "failure")
             time.sleep(self.download_finish_delay)
             self.finished.emit(1)
             return False

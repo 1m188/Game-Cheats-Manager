@@ -1,6 +1,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <shlobj.h>
+#include <cstdlib>
 #include <FL/Fl_Table.H>
 
 using json = nlohmann::json;
@@ -21,6 +22,7 @@ constexpr int UI_TOGGLE_SPACER_WIDTH = 24;
 constexpr int UI_INPUT_WIDTH = 200;
 constexpr int UI_OPTION_GAP = 10;
 constexpr int UI_OPTION_HEIGHT = static_cast<int>(font_size * 1.5);
+constexpr int UI_TABLE_SCROLLBAR_SIZE = 16;
 
 // ===========================================================================
 // Data Structures
@@ -72,6 +74,7 @@ struct InfoCallbackData
     std::string windowTitleKey;
     Fl_Window **windowInstance;
     std::vector<std::string> columnTitles;
+    std::vector<int> columnWidths;
     std::string (Trainer::*dataRetriever)();
 };
 
@@ -312,28 +315,16 @@ void clean_up(Fl_Window *window, Trainer *trainer)
     uncheck_all_checkbuttons(window);
 }
 
+// Numeric "a < b" via strtold (handles decimals/negatives and saturates instead of throwing on
+// overflow, so out-of-range input still clamps); lexicographic fallback if a side isn't a number.
 bool compareNumericStrings(const std::string &a, const std::string &b)
 {
-    // Handle negative numbers
-    if (a[0] == '-' && b[0] != '-')
-        return true; // Negative is less than positive
-    if (a[0] != '-' && b[0] == '-')
-        return false; // Positive is greater than negative
-    if (a[0] == '-' && b[0] == '-')
-        return compareNumericStrings(b.substr(1), a.substr(1)); // Reverse comparison for negatives
-
-    // Remove leading zeros
-    std::string a_trim = a;
-    std::string b_trim = b;
-    a_trim.erase(0, a_trim.find_first_not_of('0'));
-    b_trim.erase(0, b_trim.find_first_not_of('0'));
-
-    // Compare by length
-    if (a_trim.size() != b_trim.size())
-        return a_trim.size() < b_trim.size();
-
-    // Compare lexicographically if lengths are equal
-    return a_trim < b_trim;
+    char *ea = nullptr, *eb = nullptr;
+    long double va = std::strtold(a.c_str(), &ea);
+    long double vb = std::strtold(b.c_str(), &eb);
+    if (ea == a.c_str() || eb == b.c_str())
+        return a < b;
+    return va < vb;
 }
 
 void set_input_values(Fl_Input *input, std::string def, std::string min, std::string max)
@@ -557,22 +548,40 @@ protected:
     }
 
 public:
-    ItemTable(int x, int y, int w, int h, Fl_Input *inp, const std::vector<std::string> &titles, const char *l = 0) : Fl_Table(x, y, w, h, l), input(inp), columnTitles(titles)
+    ItemTable(int x, int y, int w, int h, Fl_Input *inp, const std::vector<std::string> &titles, const std::vector<int> &widths, const char *l = 0) : Fl_Table(x, y, w, h, l), input(inp), columnTitles(titles)
     {
-        int scrollbarSize = 16;
+        int scrollbarSize = UI_TABLE_SCROLLBAR_SIZE;
         int numCols = titles.size();
         cols(numCols);
         col_header(1);
 
-        // Set column widths: first column (ID) is narrower, remaining columns share the rest
-        int availableWidth = w - scrollbarSize;
-        int idColWidth = 100;
-        int otherColsWidth = (availableWidth - idColWidth) / (numCols - 1);
-
-        col_width(0, idColWidth);
-        for (int i = 1; i < numCols; i++)
+        bool hasValidWidths = widths.size() == titles.size();
+        for (int width : widths)
         {
-            col_width(i, otherColsWidth);
+            if (width <= 0)
+            {
+                hasValidWidths = false;
+                break;
+            }
+        }
+
+        if (hasValidWidths)
+        {
+            for (int i = 0; i < numCols; ++i)
+                col_width(i, widths[i]);
+        }
+        else if (numCols > 0)
+        {
+            // Preserve the historical layout if a caller supplies invalid widths.
+            const int availableWidth = w - scrollbarSize;
+            const int idColWidth = numCols == 1 ? availableWidth : 100;
+            col_width(0, idColWidth);
+            if (numCols > 1)
+            {
+                const int otherColsWidth = (availableWidth - idColWidth) / (numCols - 1);
+                for (int i = 1; i < numCols; ++i)
+                    col_width(i, otherColsWidth);
+            }
         }
 
         row_header(0);
@@ -601,6 +610,7 @@ void info_callback(Fl_Widget *widget, void *data)
     Trainer *trainer = info_data->trainer;
     Fl_Input *input = info_data->input_ptr ? *info_data->input_ptr : nullptr;
     const std::vector<std::string> &columnTitles = info_data->columnTitles;
+    const std::vector<int> &columnWidths = info_data->columnWidths;
     const std::string &windowTitleKey = info_data->windowTitleKey;
     Fl_Window *&list_window = *info_data->windowInstance;
 
@@ -625,7 +635,19 @@ void info_callback(Fl_Widget *widget, void *data)
     int trainer_w = trainer_window->w();
     int trainer_h = trainer_window->h();
 
-    int list_w = 350;
+    bool hasValidColumnWidths = columnWidths.size() == columnTitles.size();
+    int list_w = UI_TABLE_SCROLLBAR_SIZE;
+    for (int width : columnWidths)
+    {
+        if (width <= 0)
+        {
+            hasValidColumnWidths = false;
+            break;
+        }
+        list_w += width;
+    }
+    if (!hasValidColumnWidths)
+        list_w = 350;
     int list_h = 500;
     int list_x = trainer_x + (trainer_w - list_w) / 2;
     int list_y = trainer_y + (trainer_h - list_h) / 2;
@@ -661,7 +683,7 @@ void info_callback(Fl_Widget *widget, void *data)
         }
     }
 
-    ItemTable *table = new ItemTable(0, 0, list_w, list_h, input, columnTitles);
+    ItemTable *table = new ItemTable(0, 0, list_w, list_h, input, columnTitles, columnWidths);
     table->setItems(items);
     table->color(FL_FREE_COLOR);
 
@@ -677,6 +699,7 @@ Fl_Button *create_info_button(
     Trainer *trainer,
     Fl_Input **input_field_ptr,
     const std::vector<std::string> &info_columns,
+    const std::vector<int> &column_widths,
     const std::string &info_window_key,
     Fl_Window **info_window_instance,
     std::string (Trainer::*info_data_retriever)(),
@@ -686,7 +709,7 @@ Fl_Button *create_info_button(
     info_button->box(FL_NO_BOX);
     info_button->image(info_img);
 
-    InfoCallbackData *info_data = new InfoCallbackData{trainer, input_field_ptr, info_window_key, info_window_instance, info_columns, info_data_retriever};
+    InfoCallbackData *info_data = new InfoCallbackData{trainer, input_field_ptr, info_window_key, info_window_instance, info_columns, column_widths, info_data_retriever};
     info_button->callback(info_callback, info_data);
 
     return info_button;
@@ -885,7 +908,8 @@ Fl_Input *place_indented_input_widget(
     const char *input_default,
     const char *input_min,
     const char *input_max,
-    int input_type = FL_INT_INPUT)
+    int input_type = FL_INT_INPUT,
+    Fl_Widget *info_button = nullptr)
 {
     Fl_Flex *input_flex = new Fl_Flex(0, 0, 0, 0, Fl_Flex::HORIZONTAL);
     input_flex->gap(UI_OPTION_GAP);
@@ -897,6 +921,12 @@ Fl_Input *place_indented_input_widget(
     input_flex->fixed(input, UI_BUTTON_WIDTH);
     input->type(input_type);
     set_input_values(input, input_default, input_min, input_max);
+
+    if (info_button)
+    {
+        input_flex->fixed(info_button, 20);
+        input_flex->add(info_button);
+    }
 
     Fl_Box *label = new Fl_Box(0, 0, 0, 0);
     tr(label, labelKey);
