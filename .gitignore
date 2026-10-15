@@ -6,8 +6,8 @@ secret_config.py
 *.mo
 dist/
 compile.ps1
-utility.py
-ResourceHacker.ini
+update_translations.py
 elevate.manifest
 cpp/
 docs/
+!Game Trainers/docs/

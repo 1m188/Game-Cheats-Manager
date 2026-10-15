@@ -3,11 +3,11 @@ import sys
 import winreg as reg
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon, QPixmap
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QSizePolicy, QTextEdit, QVBoxLayout
+from PyQt6.QtGui import QIcon, QTextCursor
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLayout, QLineEdit, QMessageBox, QProgressBar, QSizePolicy, QTextEdit, QVBoxLayout
 
 from config import *
-from widgets.custom_widgets import CustomButton
+from widgets.custom_widgets import CustomButton, MultilingualComboBox, create_image_label
 from threads.other_threads import VersionFetchWorker, TrainerUploadWorker
 
 
@@ -90,10 +90,7 @@ class CopyRightWarning(QDialog):
         warningLayout = QHBoxLayout()
         layout.addLayout(warningLayout)
 
-        WarningPixmap = QPixmap(resource_path("assets/warning.png"))
-        scaledWarningPixmap = WarningPixmap.scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        warningSign = QLabel()
-        warningSign.setPixmap(scaledWarningPixmap)
+        warningSign = create_image_label("assets/warning.png", 120)
         warningLayout.addWidget(warningSign)
 
         warningFont = self.font()
@@ -179,7 +176,7 @@ class SettingsDialog(QDialog):
         languageLabel = QLabel(tr("Language:"))
         languageLabel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         languageLayout.addWidget(languageLabel)
-        self.languageCombo = QComboBox()
+        self.languageCombo = MultilingualComboBox()
         self.languageCombo.addItems(language_options.keys())
         self.languageCombo.setCurrentText(self.find_settings_key(settings["language"], language_options))
         languageLayout.addWidget(self.languageCombo)
@@ -194,11 +191,6 @@ class SettingsDialog(QDialog):
         self.checkAppUpdateCheckbox.setChecked(settings["checkAppUpdate"])
         settingsWidgetsLayout.addWidget(self.checkAppUpdateCheckbox)
 
-        # Legacy compatibility mode (Safe ASCII Launch)
-        self.safePathCheckbox = QCheckBox(tr("Use safe launch path (may fix trainers unable to launch)"))
-        self.safePathCheckbox.setChecked(settings["safePath"])
-        settingsWidgetsLayout.addWidget(self.safePathCheckbox)
-
         # Always show english
         self.alwaysEnCheckbox = QCheckBox(tr("Always show search results in English"))
         self.alwaysEnCheckbox.setChecked(settings["enSearchResults"])
@@ -209,10 +201,10 @@ class SettingsDialog(QDialog):
         self.sortByOriginCheckbox.setChecked(settings["sortByOrigin"])
         settingsWidgetsLayout.addWidget(self.sortByOriginCheckbox)
 
-        # Auto update translation json
-        self.autoUpdateTranslationsCheckbox = QCheckBox(tr("Update trainer translations automatically"))
-        self.autoUpdateTranslationsCheckbox.setChecked(settings["autoUpdateTranslations"])
-        settingsWidgetsLayout.addWidget(self.autoUpdateTranslationsCheckbox)
+        # IPv4 only
+        self.ipv4OnlyCheckbox = QCheckBox(tr("Use IPv4 only for network connections"))
+        self.ipv4OnlyCheckbox.setChecked(settings["ipv4Only"])
+        settingsWidgetsLayout.addWidget(self.ipv4OnlyCheckbox)
 
         # Apply button
         applyButtonLayout = QHBoxLayout()
@@ -249,13 +241,13 @@ class SettingsDialog(QDialog):
 
         settings["theme"] = theme_options[self.themeCombo.currentText()]
         settings["language"] = language_options[self.languageCombo.currentText()]
-        settings["safePath"] = self.safePathCheckbox.isChecked()
         settings["enSearchResults"] = self.alwaysEnCheckbox.isChecked()
         settings["sortByOrigin"] = self.sortByOriginCheckbox.isChecked()
         settings["checkAppUpdate"] = self.checkAppUpdateCheckbox.isChecked()
         settings["launchAppOnStartup"] = self.launchAppOnStarupCheckbox.isChecked()
-        settings["autoUpdateTranslations"] = self.autoUpdateTranslationsCheckbox.isChecked()
+        settings["ipv4Only"] = self.ipv4OnlyCheckbox.isChecked()
         apply_settings(settings)
+        apply_ipv4_only()
 
         if sys.argv[0].endswith('.exe'):
             app_name = "Game Cheats Manager"
@@ -305,11 +297,7 @@ class AboutDialog(QDialog):
         aboutLayout.addLayout(appLayout)
 
         # App logo
-        logoPixmap = QPixmap(resource_path("assets/logo.png"))
-        scaledLogoPixmap = logoPixmap.scaled(120, 120, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        logoLabel = QLabel()
-        logoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logoLabel.setPixmap(scaledLogoPixmap)
+        logoLabel = create_image_label("assets/logo.png", 120, alignment=Qt.AlignmentFlag.AlignCenter)
         if settings["theme"] == "light":
             logoLabel.setStyleSheet("""
                 border: 2px solid black;
@@ -411,7 +399,7 @@ class AboutDialog(QDialog):
     def update_version_labels(self, latest_version):
         current_version = APP_VERSION
 
-        if latest_version > current_version:
+        if is_newer_version(latest_version, current_version):
             self.currentVersionNumberLabel.setStyleSheet("color: red;")
             self.newestVersionNumberLabel.setStyleSheet("color: green;")
             self.updateButton.setVisible(1)
@@ -426,6 +414,10 @@ class AboutDialog(QDialog):
 
 
 class TrainerUploadDialog(QDialog):
+    _SECTION_SPACING = 20
+    _FIELD_SPACING = 5
+    _NOTES_MAX_LENGTH = 150
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.worker = None
@@ -434,59 +426,34 @@ class TrainerUploadDialog(QDialog):
         self.setMinimumWidth(500)
 
         layout = QVBoxLayout()
-        layout.setSpacing(20)
+        layout.setSpacing(self._SECTION_SPACING)
         layout.setContentsMargins(30, 30, 30, 30)
         self.setLayout(layout)
 
         # Contact Info
-        contactLayout = QVBoxLayout()
-        contactLayout.setSpacing(5)
-        contactLayout.addWidget(QLabel(tr("Contact Info (Optional):")))
         self.contactEdit = QLineEdit()
         self.contactEdit.setPlaceholderText(tr("Email"))
-        contactLayout.addWidget(self.contactEdit)
-
-        contact_info_label = QLabel(tr("If you provide your Game-Zone Labs account email and your trainer is approved, a badge will be added to your account"))
-        contact_info_font = contact_info_label.font()
-        contact_info_font.setPointSize(9)
-        contact_info_label.setFont(contact_info_font)
-        contact_info_label.setStyleSheet("color: gray;")
-        contact_info_label.setWordWrap(True)
-        contactLayout.addWidget(contact_info_label)
-        layout.addLayout(contactLayout)
+        layout.addLayout(self.field_group(
+            tr("Contact Info (Optional):"),
+            self.contactEdit,
+            tr("If you provide your Game-Zone Labs account email and your trainer is approved, a badge will be added to your account")
+        ))
 
         # Trainer Name
-        nameLayout = QVBoxLayout()
-        nameLayout.setSpacing(5)
-        nameLayout.addWidget(QLabel(tr("Trainer Name:")))
         self.nameEdit = QLineEdit()
         self.nameEdit.setPlaceholderText(tr("What game does it work for"))
-        nameLayout.addWidget(self.nameEdit)
-        layout.addLayout(nameLayout)
+        layout.addLayout(self.field_group(tr("Trainer Name:"), self.nameEdit))
 
         # Trainer Source
-        sourceLayout = QVBoxLayout()
-        sourceLayout.setSpacing(5)
-        sourceLayout.addWidget(QLabel(tr("Trainer Source (Optional):")))
         self.sourceEdit = QLineEdit()
-        self.sourceEdit.setPlaceholderText(tr("Original URL or author"))
-        sourceLayout.addWidget(self.sourceEdit)
-
-        source_info_label = QLabel(tr("If you made the trainer, please provide your author name"))
-        source_info_font = source_info_label.font()
-        source_info_font.setPointSize(9)
-        source_info_label.setFont(source_info_font)
-        source_info_label.setStyleSheet("color: gray;")
-        source_info_label.setWordWrap(True)
-        sourceLayout.addWidget(source_info_label)
-        layout.addLayout(sourceLayout)
+        self.sourceEdit.setPlaceholderText(tr("Original URL and author"))
+        layout.addLayout(self.field_group(
+            tr("Trainer Source (Optional):"),
+            self.sourceEdit,
+            tr("Please fill this in if possible to speed up the review process. If you made the trainer, please provide your author name")
+        ))
 
         # Trainer File Selection
-        fileLabelLayout = QVBoxLayout()
-        fileLabelLayout.setSpacing(5)
-        fileLabelLayout.addWidget(QLabel(tr("Trainer File:")))
-
-        fileSelectLayout = QHBoxLayout()
         self.fileEdit = QLineEdit()
         self.fileEdit.setReadOnly(True)
         self.fileEdit.setPlaceholderText(tr("Select a trainer file") + "...")
@@ -494,49 +461,46 @@ class TrainerUploadDialog(QDialog):
         self.browseButton = CustomButton("...")
         self.browseButton.clicked.connect(self.browse_file)
 
+        fileSelectLayout = QHBoxLayout()
+        fileSelectLayout.setSpacing(self._FIELD_SPACING)
         fileSelectLayout.addWidget(self.fileEdit)
         fileSelectLayout.addWidget(self.browseButton)
-        fileLabelLayout.addLayout(fileSelectLayout)
 
-        info_label = QLabel(tr("If the trainer consists of multiple files, please compress them into a single archive (zip/rar/7z) before uploading"))
-        info_font = info_label.font()
-        info_font.setPointSize(9)
-        info_label.setFont(info_font)
-        info_label.setStyleSheet("color: gray;")
-        info_label.setWordWrap(True)
-        fileLabelLayout.addWidget(info_label)
-        layout.addLayout(fileLabelLayout)
+        layout.addLayout(self.field_group(
+            tr("Trainer File:"),
+            fileSelectLayout,
+            tr("If the trainer consists of multiple files, please compress them into a single archive (zip/rar/7z) before uploading")
+        ))
 
         # Notes
-        notesLayout = QVBoxLayout()
-        notesLayout.setSpacing(5)
-        notesLayout.addWidget(QLabel(tr("Additional Notes:")))
         self.notesEdit = QTextEdit()
         self.notesEdit.setPlaceholderText(tr("Anything else to add..."))
-        self.notesEdit.setMaximumHeight(100)
-        self.notesEdit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        notesLayout.addWidget(self.notesEdit)
+        self.notesEdit.setMinimumHeight(100)
+        self.notesEdit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.notesEdit.textChanged.connect(self.update_notes_count)
 
-        notes_info_label = QLabel(
+        self.notesCountLabel = self.hint_label("")
+        self.notesCountLabel.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.update_notes_count()
+
+        notesLayout = QVBoxLayout()
+        notesLayout.setSpacing(self._FIELD_SPACING)
+        notesLayout.addWidget(self.notesEdit, 1)
+        notesLayout.addWidget(self.notesCountLabel)
+        layout.addLayout(self.field_group(
+            tr("Additional Notes (Optional):"),
+            notesLayout,
             tr("Please make sure the trainer you are about to upload is tested to be safe and functional.") + "\n" +
-            tr("For more info about trainer uploading, please join the QQ group to discuss: 186859946.")
-        )
-        notes_info_font = notes_info_label.font()
-        notes_info_font.setPointSize(9)
-        notes_info_label.setFont(notes_info_font)
-        notes_info_label.setStyleSheet("color: gray;")
-        notes_info_label.setWordWrap(True)
-        notesLayout.addWidget(notes_info_label)
-        layout.addLayout(notesLayout)
+            tr("Beyond trainers, you can upload other types of files, such as mods, tools, guides, or any other game-related resources. Please ensure instructions are provided for how to use them."),
+            stretch=1
+        ), 1)
 
-        # Progress Bar
+        # Progress Bar, hidden until an upload starts so it costs no space until then
         self.progressBar = QProgressBar()
         self.progressBar.setRange(0, 100)
         self.progressBar.setValue(0)
         self.progressBar.setVisible(False)
         layout.addWidget(self.progressBar)
-
-        layout.addStretch()
 
         # Buttons
         buttonLayout = QHBoxLayout()
@@ -549,6 +513,52 @@ class TrainerUploadDialog(QDialog):
         buttonLayout.addWidget(self.uploadButton)
         layout.addLayout(buttonLayout)
 
+        self.fit_height()
+        self.resize(self.minimumWidth(), self.minimumHeight())
+
+    def field_group(self, title, field, hint=None, stretch=0):
+        """A label, its input and an optional gray hint"""
+        group = QVBoxLayout()
+        group.setSpacing(self._FIELD_SPACING)
+        group.addWidget(QLabel(title))
+
+        if isinstance(field, QLayout):
+            group.addLayout(field, stretch)
+        else:
+            group.addWidget(field, stretch)
+
+        if hint:
+            hintLabel = self.hint_label(hint)
+            hintLabel.setWordWrap(True)
+            group.addWidget(hintLabel)
+
+        return group
+
+    @staticmethod
+    def hint_label(text):
+        """A small gray label for secondary information"""
+        label = QLabel(text)
+        font = label.font()
+        font.setPointSize(9)
+        label.setFont(font)
+        label.setStyleSheet("color: gray;")
+        return label
+
+    def update_notes_count(self):
+        """Keep the notes within their limit and show how much of it is used"""
+        overflow = len(self.notesEdit.toPlainText()) - self._NOTES_MAX_LENGTH
+        if overflow > 0:
+            # What was just typed or pasted past the limit sits right before the cursor
+            cursor = self.notesEdit.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, overflow)
+            cursor.removeSelectedText()  # changes the text again, which updates the count
+            return
+        self.notesCountLabel.setText(f"{len(self.notesEdit.toPlainText())}/{self._NOTES_MAX_LENGTH}")
+
+    def fit_height(self):
+        """Keep the dialog tall enough for its content"""
+        self.setMinimumHeight(self.layout().minimumHeightForWidth(self.minimumWidth()))
+
     def browse_file(self):
         default_dir = settings.get("downloadPath", "")
         file_path, _ = QFileDialog.getOpenFileName(
@@ -559,8 +569,6 @@ class TrainerUploadDialog(QDialog):
         )
         if file_path:
             self.fileEdit.setText(file_path)
-            if not self.nameEdit.text():
-                self.nameEdit.setText(os.path.basename(file_path))
 
     def start_upload(self):
         file_path = self.fileEdit.text()
@@ -578,6 +586,7 @@ class TrainerUploadDialog(QDialog):
         self.set_ui_locked(True)
         self.progressBar.setValue(0)
         self.progressBar.setVisible(True)
+        self.fit_height()
 
         self.worker = TrainerUploadWorker(
             file_path,
@@ -595,6 +604,7 @@ class TrainerUploadDialog(QDialog):
 
     def handle_upload_finished(self, success, message):
         self.progressBar.setVisible(False)
+        self.fit_height()
         self.set_ui_locked(False)
 
         if success:

@@ -2,12 +2,12 @@ from packaging import version
 import subprocess
 import re
 
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QTabWidget, QVBoxLayout, QWidget
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QSizePolicy, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtGui import QIcon
 from PyQt6.QtCore import Qt, QTimer
 
 from config import *
-from widgets.custom_widgets import AlertWidget, CustomButton
+from widgets.custom_widgets import AlertWidget, CustomButton, create_image_label
 from threads.other_threads import WeModCustomization
 
 
@@ -43,14 +43,21 @@ class TrainerManagementDialog(QDialog):
         while self.active_alerts:
             self.active_alerts[0].close()
 
-        oldEnableXiaoXing = settings["enableXiaoXing"]
-        newEnableXiaoXing = self.enableXiaoXingCheckbox.isChecked()
-        if not oldEnableXiaoXing and newEnableXiaoXing:
-            self.parent().fetch_xiaoxing_data()
+        # A source switched on may have stale or missing data, so fetch it right away
+        sourceToggles = (
+            ("enableGCM", self.enableGCMCheckbox, self.parent().fetch_gcm_data),
+            ("enableFling", self.enableFlingCheckbox, self.parent().fetch_fling_data),
+            ("enableXiaoXing", self.enableXiaoXingCheckbox, self.parent().fetch_xiaoxing_data),
+            ("enableCT", self.enableCTCheckbox, self.parent().fetch_ct_data),
+        )
+        for settingName, checkbox, fetchData in sourceToggles:
+            if not settings[settingName] and checkbox.isChecked():
+                fetchData()
 
         settings["enableGCM"] = self.enableGCMCheckbox.isChecked()
         settings["autoUpdateGCMData"] = self.autoUpdateGCMDataCheckbox.isChecked()
         settings["autoUpdateGCMTrainers"] = self.autoUpdateGCMTrainersCheckbox.isChecked()
+        settings["enableFling"] = self.enableFlingCheckbox.isChecked()
         settings["removeFlingBgMusic"] = self.removeFlingBgMusicCheckbox.isChecked()
         settings["autoUpdateFlingData"] = self.autoUpdateFlingDataCheckbox.isChecked()
         settings["autoUpdateFlingTrainers"] = self.autoUpdateFlingTrainersCheckbox.isChecked()
@@ -61,6 +68,12 @@ class TrainerManagementDialog(QDialog):
         settings["enableCT"] = self.enableCTCheckbox.isChecked()
         settings["autoUpdateCTData"] = self.autoUpdateCTDataCheckbox.isChecked()
         settings["autoUpdateCTTrainers"] = self.autoUpdateCTTrainersCheckbox.isChecked()
+        settings["launchCTAsAdmin"] = self.launchCTAsAdminCheckbox.isChecked()
+
+        # Global settings
+        settings["autoUpdateTranslations"] = self.autoUpdateTranslationsCheckbox.isChecked()
+        settings["launchAsAdmin"] = self.launchAsAdminCheckbox.isChecked()
+        settings["safePath"] = self.safePathCheckbox.isChecked()
         apply_settings(settings)
 
     def show_alert(self, message, alert_type):
@@ -90,18 +103,14 @@ class TrainerManagementDialog(QDialog):
         column1 = QVBoxLayout()
         columns.addLayout(column1, stretch=2)
 
-        logoPixmap = QPixmap(resource_path("assets/logo_trainer.png"))
-        scaledLogoPixmap = logoPixmap.scaled(130, 130, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        logoLabel = QLabel()
-        logoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logoLabel.setPixmap(scaledLogoPixmap)
+        logoLabel = create_image_label("assets/logo_trainer.png", 130, alignment=Qt.AlignmentFlag.AlignCenter)
         column1.addWidget(logoLabel)
 
         column2 = QVBoxLayout()
         column2.setSpacing(15)
         column2.addStretch(1)
         columns.addLayout(column2, stretch=3)
-        columns.setAlignment(column2, Qt.AlignmentFlag.AlignHCenter)
+        columns.setAlignment(column2, Qt.AlignmentFlag.AlignLeft)
 
         # Enable GCM and Community trainer
         self.enableGCMCheckbox = QCheckBox(tr("Enable search for GCM and Community trainers"))
@@ -117,6 +126,37 @@ class TrainerManagementDialog(QDialog):
         self.autoUpdateGCMTrainersCheckbox = QCheckBox(tr("Update GCM and Community trainers automatically"))
         self.autoUpdateGCMTrainersCheckbox.setChecked(settings["autoUpdateGCMTrainers"])
         column2.addWidget(self.autoUpdateGCMTrainersCheckbox)
+
+        # add a separator line
+        line = QLabel()
+        line.setFixedHeight(1)
+        line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        line.setStyleSheet("background-color: #C0C0C0;")
+        column2.addWidget(line)
+
+        # Settings below apply to every trainer, not just GCM ones
+        globalSettingsHeader = QLabel(tr("Global Settings"))
+        column2.addWidget(globalSettingsHeader)
+
+        # Auto update translation json
+        self.autoUpdateTranslationsCheckbox = QCheckBox(tr("Update trainer translations automatically"))
+        self.autoUpdateTranslationsCheckbox.setChecked(settings["autoUpdateTranslations"])
+        column2.addWidget(self.autoUpdateTranslationsCheckbox)
+
+        # Launch trainers as admin
+        self.launchAsAdminCheckbox = QCheckBox(tr("Launch trainers as administrator"))
+        self.launchAsAdminCheckbox.setChecked(settings["launchAsAdmin"])
+        column2.addWidget(self.launchAsAdminCheckbox)
+
+        # Legacy compatibility mode (Safe ASCII Launch)
+        safePathLayout = QHBoxLayout()
+        safePathLayout.setSpacing(6)
+        column2.addLayout(safePathLayout)
+        column2.setAlignment(safePathLayout, Qt.AlignmentFlag.AlignLeft)
+        self.safePathCheckbox = QCheckBox(tr("Use safe launch path"))
+        self.safePathCheckbox.setChecked(settings["safePath"])
+        safePathLayout.addWidget(self.safePathCheckbox)
+        safePathLayout.addWidget(create_image_label("assets/info.png", 17, tooltip=tr("May fix trainers unable to launch")))
 
         column2.addStretch(1)
         return gcmTab
@@ -138,23 +178,29 @@ class TrainerManagementDialog(QDialog):
         column1 = QVBoxLayout()
         columns.addLayout(column1, stretch=2)
 
-        logoPixmap = QPixmap(resource_path("assets/fling.png"))
-        scaledLogoPixmap = logoPixmap.scaled(130, 130, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        logoLabel = QLabel()
-        logoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logoLabel.setPixmap(scaledLogoPixmap)
+        logoLabel = create_image_label("assets/fling.png", 130, alignment=Qt.AlignmentFlag.AlignCenter)
         column1.addWidget(logoLabel)
 
         column2 = QVBoxLayout()
         column2.setSpacing(15)
         column2.addStretch(1)
         columns.addLayout(column2, stretch=3)
-        columns.setAlignment(column2, Qt.AlignmentFlag.AlignHCenter)
+        columns.setAlignment(column2, Qt.AlignmentFlag.AlignLeft)
+
+        # Enable Fling trainer
+        self.enableFlingCheckbox = QCheckBox(tr("Enable search for FLiNG trainers"))
+        self.enableFlingCheckbox.setChecked(settings["enableFling"])
+        column2.addWidget(self.enableFlingCheckbox)
 
         # Remove Fling trainer background music when downloading
+        removeFlingBgMusicLayout = QHBoxLayout()
+        removeFlingBgMusicLayout.setSpacing(6)
+        column2.addLayout(removeFlingBgMusicLayout)
+        column2.setAlignment(removeFlingBgMusicLayout, Qt.AlignmentFlag.AlignLeft)
         self.removeFlingBgMusicCheckbox = QCheckBox(tr("Remove trainer background music"))
         self.removeFlingBgMusicCheckbox.setChecked(settings["removeFlingBgMusic"])
-        column2.addWidget(self.removeFlingBgMusicCheckbox)
+        removeFlingBgMusicLayout.addWidget(self.removeFlingBgMusicCheckbox)
+        removeFlingBgMusicLayout.addWidget(create_image_label("assets/info.png", 17, tooltip=tr("Only works when downloading")))
 
         # Auto update Fling data
         self.autoUpdateFlingDataCheckbox = QCheckBox(tr("Update FLiNG data automatically"))
@@ -186,18 +232,14 @@ class TrainerManagementDialog(QDialog):
         column1 = QVBoxLayout()
         columns.addLayout(column1, stretch=2)
 
-        logoPixmap = QPixmap(resource_path("assets/xiaoxing.png"))
-        scaledLogoPixmap = logoPixmap.scaled(130, 130, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        logoLabel = QLabel()
-        logoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logoLabel.setPixmap(scaledLogoPixmap)
+        logoLabel = create_image_label("assets/xiaoxing.png", 130, alignment=Qt.AlignmentFlag.AlignCenter)
         column1.addWidget(logoLabel)
 
         column2 = QVBoxLayout()
         column2.setSpacing(15)
         column2.addStretch(1)
         columns.addLayout(column2, stretch=3)
-        columns.setAlignment(column2, Qt.AlignmentFlag.AlignHCenter)
+        columns.setAlignment(column2, Qt.AlignmentFlag.AlignLeft)
 
         # Enable XiaoXing trainer
         self.enableXiaoXingCheckbox = QCheckBox(tr("Enable search for XiaoXing trainers"))
@@ -205,9 +247,14 @@ class TrainerManagementDialog(QDialog):
         column2.addWidget(self.enableXiaoXingCheckbox)
 
         # Unlock paid functions
+        unlockXiaoXingLayout = QHBoxLayout()
+        unlockXiaoXingLayout.setSpacing(6)
+        column2.addLayout(unlockXiaoXingLayout)
+        column2.setAlignment(unlockXiaoXingLayout, Qt.AlignmentFlag.AlignLeft)
         self.unlockXiaoXingCheckbox = QCheckBox(tr("Unlock all functions"))
         self.unlockXiaoXingCheckbox.setChecked(settings["unlockXiaoXing"])
-        column2.addWidget(self.unlockXiaoXingCheckbox)
+        unlockXiaoXingLayout.addWidget(self.unlockXiaoXingCheckbox)
+        unlockXiaoXingLayout.addWidget(create_image_label("assets/info.png", 17, tooltip=tr("Only works when downloading, and only for some trainers")))
 
         # Auto update XiaoXing data
         self.autoUpdateXiaoXingDataCheckbox = QCheckBox(tr("Update XiaoXing data automatically"))
@@ -242,18 +289,14 @@ class TrainerManagementDialog(QDialog):
         column1 = QVBoxLayout()
         columns.addLayout(column1, stretch=2)
 
-        logoPixmap = QPixmap(resource_path("assets/ce.png"))
-        scaledLogoPixmap = logoPixmap.scaled(130, 130, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        logoLabel = QLabel()
-        logoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logoLabel.setPixmap(scaledLogoPixmap)
+        logoLabel = create_image_label("assets/ce.png", 130, alignment=Qt.AlignmentFlag.AlignCenter)
         column1.addWidget(logoLabel)
 
         column2 = QVBoxLayout()
         column2.setSpacing(15)
         column2.addStretch(1)
         columns.addLayout(column2, stretch=3)
-        columns.setAlignment(column2, Qt.AlignmentFlag.AlignHCenter)
+        columns.setAlignment(column2, Qt.AlignmentFlag.AlignLeft)
 
         # CE installation status
         self.installStatus = QLabel()
@@ -291,9 +334,10 @@ class TrainerManagementDialog(QDialog):
         self.addzhCNCheckbox = QCheckBox(tr("Add Simplified Chinese"))
         column2.addWidget(self.addzhCNCheckbox)
 
-        # add a dashed line
+        # add a separator line
         line = QLabel()
         line.setFixedHeight(1)
+        line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         line.setStyleSheet("background-color: #C0C0C0;")
         column2.addWidget(line)
 
@@ -311,6 +355,11 @@ class TrainerManagementDialog(QDialog):
         self.autoUpdateCTTrainersCheckbox = QCheckBox(tr("Update Cheat Tables automatically"))
         self.autoUpdateCTTrainersCheckbox.setChecked(settings["autoUpdateCTTrainers"])
         column2.addWidget(self.autoUpdateCTTrainersCheckbox)
+
+        # Launch CT as admin
+        self.launchCTAsAdminCheckbox = QCheckBox(tr("Launch Cheat Tables as administrator"))
+        self.launchCTAsAdminCheckbox.setChecked(settings["launchCTAsAdmin"])
+        column2.addWidget(self.launchCTAsAdminCheckbox)
 
         # Apply button
         applyButtonLayout = QHBoxLayout()
@@ -345,18 +394,14 @@ class TrainerManagementDialog(QDialog):
         column1 = QVBoxLayout()
         columns.addLayout(column1, stretch=2)
 
-        logoPixmap = QPixmap(resource_path("assets/wand.png"))
-        scaledLogoPixmap = logoPixmap.scaled(130, 130, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        logoLabel = QLabel()
-        logoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logoLabel.setPixmap(scaledLogoPixmap)
+        logoLabel = create_image_label("assets/wand.png", 130, alignment=Qt.AlignmentFlag.AlignCenter)
         column1.addWidget(logoLabel)
 
         column2 = QVBoxLayout()
         column2.setSpacing(15)
         column2.addStretch(1)
         columns.addLayout(column2, stretch=3)
-        columns.setAlignment(column2, Qt.AlignmentFlag.AlignHCenter)
+        columns.setAlignment(column2, Qt.AlignmentFlag.AlignLeft)
 
         # WeMod installation path
         installLayout = QVBoxLayout()
@@ -449,18 +494,14 @@ class TrainerManagementDialog(QDialog):
         column1 = QVBoxLayout()
         columns.addLayout(column1, stretch=2)
 
-        logoPixmap = QPixmap(resource_path("assets/cevo.png"))
-        scaledLogoPixmap = logoPixmap.scaled(130, 130, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        logoLabel = QLabel()
-        logoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logoLabel.setPixmap(scaledLogoPixmap)
+        logoLabel = create_image_label("assets/cevo.png", 130, alignment=Qt.AlignmentFlag.AlignCenter)
         column1.addWidget(logoLabel)
 
         column2 = QVBoxLayout()
         column2.setSpacing(15)
         column2.addStretch(1)
         columns.addLayout(column2, stretch=3)
-        columns.setAlignment(column2, Qt.AlignmentFlag.AlignHCenter)
+        columns.setAlignment(column2, Qt.AlignmentFlag.AlignLeft)
 
         # Cheat Evolution installation status
         self.cevoInstallStatus = QLabel()
@@ -535,14 +576,17 @@ class TrainerManagementDialog(QDialog):
             self.checkCEInstallStatus()
 
     def resetCEPath(self):
-        self.ceInstallLineEdit.setText(ce_install_path)
-        settings["cePath"] = os.path.normpath(ce_install_path)
+        # Cheat Engine downloaded in GCM takes priority over a system installation
+        defaultPath = findCEInstallPath()
+        settings["cePath"] = os.path.normpath(defaultPath) if defaultPath else ""
+        self.ceInstallLineEdit.setText(settings["cePath"])
         apply_settings(settings)
         self.checkCEInstallStatus()
 
     def checkCEInstallStatus(self):
-        cePath = os.path.join(self.ceInstallLineEdit.text(), 'Cheat Engine.exe')
-        if os.path.exists(cePath):
+        installPath = self.ceInstallLineEdit.text()
+        cePath = os.path.join(installPath, CE_EXECUTABLE) if installPath else ""
+        if cePath and os.path.isfile(cePath):
             self.installStatus.setText(tr("Cheat Engine is installed"))
             self.installStatus.setStyleSheet("color: green;")
             self.ceApplyButton.setEnabled(True)
@@ -591,8 +635,26 @@ class TrainerManagementDialog(QDialog):
 
         self.apply_thread = WeModCustomization(self.weModVersions, weModInstallPath, selectedWeModVersion, patchMethod, self)
         self.apply_thread.message.connect(self.show_alert, Qt.ConnectionType.BlockingQueuedConnection)
+        self.apply_thread.confirmClose.connect(self.confirmCloseWeMod, Qt.ConnectionType.BlockingQueuedConnection)
         self.apply_thread.finished.connect(self.on_finished)
         self.apply_thread.start()
+
+    def confirmCloseWeMod(self):
+        msg_box = QMessageBox(
+            QMessageBox.Icon.Question,
+            tr("Attention"),
+            tr("Wand is currently running and must be closed before patching.") +
+            "\n\n" + tr("Would you like to close it now?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            self
+        )
+
+        yes_button = msg_box.button(QMessageBox.StandardButton.Yes)
+        yes_button.setText(tr("Yes"))
+        no_button = msg_box.button(QMessageBox.StandardButton.No)
+        no_button.setText(tr("No"))
+
+        self.apply_thread.close_confirmed = msg_box.exec() == QMessageBox.StandardButton.Yes
 
     def applyCheatEngineCustomization(self):
         self.ceApplyButton.setDisabled(True)

@@ -1,20 +1,47 @@
 import ctypes
 import gettext
 import json
-import locale
 import os
 import re
 import sys
 import tempfile
+import unicodedata
 
 import polib
+from packaging.version import InvalidVersion, Version
+from PyQt6.QtCore import QLocale
+from urllib3.util import connection as urllib3_connection
 import zhon.cedict as chinese_characters
 from pypinyin import lazy_pinyin
 
-from secret_config import *
+try:
+    from secret_config import *
+except ImportError:
+    SIGNED_URL_DOWNLOAD_ENDPOINT = SIGNED_URL_UPLOAD_ENDPOINT = ''
+    VERSION_CHECKER_ENDPOINT = PATCH_PATTERNS_ENDPOINT = CLIENT_API_KEY = ''
+
+    def signed_get(url, params, timeout):
+        raise RuntimeError('Request signing is unavailable in this build')
 
 
-APP_VERSION = "2.5.0-beta.8"
+APP_VERSION = "2.5.4"
+
+
+def parse_version(version):
+    if not isinstance(version, str):
+        return None
+
+    try:
+        return Version(version.strip())
+    except InvalidVersion:
+        return None
+
+
+def is_newer_version(latest_version, current_version=APP_VERSION):
+    latest = parse_version(latest_version)
+    current = parse_version(current_version)
+    return latest is not None and current is not None and latest > current
+
 
 # All resources in development mode are relative to `src` folder
 def resource_path(relative_path):
@@ -47,47 +74,57 @@ def apply_settings(settings):
         json.dump(settings, f, indent=4)
 
 
-def load_settings():
-    locale.setlocale(locale.LC_ALL, '')
-    system_locale = locale.getlocale()[0]
-    # print(f"System locale: {system_locale}")
-    locale_mapping = {
-        "English_United States": "en_US",
-        "Chinese (Simplified)_China": "zh_CN",
-        "Chinese (Simplified)_Hong Kong SAR": "zh_CN",
-        "Chinese (Simplified)_Macao SAR": "zh_CN",
-        "Chinese (Simplified)_Singapore": "zh_CN",
-        "Chinese (Traditional)_Hong Kong SAR": "zh_TW",
-        "Chinese (Traditional)_Macao SAR": "zh_TW",
-        "Chinese (Traditional)_Taiwan": "zh_TW",
-        "German_Austria": "de_DE",
-        "German_Belgium": "de_DE",
-        "de_DE": "de_DE",
-        "German_Italy": "de_DE",
-        "German_Liechtenstein": "de_DE",
-        "German_Luxembourg": "de_DE",
-        "German_Switzerland": "de_DE"
+def apply_ipv4_only():
+    """Follow the IPv4-only setting for every request the app makes. Chinese resolvers can answer the API's IPv6
+    lookup with ::1, and Windows' combined lookup then returns a bogus IPv4 address too, so every request fails."""
+    urllib3_connection.HAS_IPV6 = _SYSTEM_HAS_IPV6 and not settings["ipv4Only"]
+
+
+def detect_app_language():
+    # Windows display-language preferences, most preferred first
+    APP_LANGUAGES = {
+        QLocale.Language.English: "en_US",
+        QLocale.Language.German: "de_DE",
+        QLocale.Language.Portuguese: "pt_BR",
     }
-    app_locale = locale_mapping.get(system_locale, 'en_US')
+
+    for tag in QLocale.system().uiLanguages():
+        system_locale = QLocale(tag)
+        if system_locale.language() == QLocale.Language.Chinese:
+            return "zh_TW" if system_locale.script() == QLocale.Script.TraditionalHanScript else "zh_CN"
+        if system_locale.language() in APP_LANGUAGES:
+            return APP_LANGUAGES[system_locale.language()]
+    return "en_US"
+
+
+def load_settings():
+    # Bound early so helpers that resolve defaults (e.g. `findCEInstallPath`) can read stored settings
+    global settings
+
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+    except Exception as e:
+        print("Error loading settings json" + str(e))
+        settings = {}
 
     default_settings = {
         "downloadPath": os.path.join(os.environ["APPDATA"], "GCM Trainers"),
-        "language": app_locale,
+        "language": detect_app_language(),
         "theme": "dark",
-        "safePath": True,
         "enSearchResults": False,
         "sortByOrigin": True,
         "checkAppUpdate": True,
         "launchAppOnStartup": False,
+        "ipv4Only": True,
         "showWarning": True,
-        "showCEPrompt": True,
-        "autoUpdateTranslations": True,
         "lastSeenAnnouncementId": "",
 
         # Trainer management configs
         "enableGCM": True,
         "autoUpdateGCMData": True,
         "autoUpdateGCMTrainers": True,
+        "enableFling": True,
         "removeFlingBgMusic": True,
         "autoUpdateFlingData": True,
         "autoUpdateFlingTrainers": True,
@@ -96,19 +133,18 @@ def load_settings():
         "autoUpdateXiaoXingData": True,
         "autoUpdateXiaoXingTrainers": True,
         "weModPath": wemod_install_path,
-        "cePath": ce_install_path,
+        "cePath": findCEInstallPath(),
         "enableCT": True,
         "autoUpdateCTData": True,
         "autoUpdateCTTrainers": True,
+        "launchCTAsAdmin": False,
         "cevoPath": "",
-    }
 
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            settings = json.load(f)
-    except Exception as e:
-        print("Error loading settings json" + str(e))
-        settings = default_settings
+        # Global trainer configs
+        "autoUpdateTranslations": True,
+        "launchAsAdmin": True,
+        "safePath": True,
+    }
 
     for key, value in default_settings.items():
         settings.setdefault(key, value)
@@ -142,19 +178,27 @@ def is_chinese(text):
     return False
 
 
-def sort_trainers_key(name):
-    if is_chinese(name):
-        return " ".join(lazy_pinyin(name))
-    return name
-
-
-def sort_trainers_key_ignore_prefix(name):
+def trainer_sort_key(name_getter, ignore_prefix=False):
     prefix_regex = re.compile(r"^\[.*?\]\s*")
-    real_name = prefix_regex.sub("", name)
 
-    if is_chinese(real_name):
-        return " ".join(lazy_pinyin(real_name))
-    return real_name
+    def sort_key(item):
+        original_name = name_getter(item)
+        name = prefix_regex.sub("", original_name) if ignore_prefix else original_name
+        name = " ".join(lazy_pinyin(name)) if is_chinese(name) else name
+        normalized_name = unicodedata.normalize("NFKC", name)
+        tokens = []
+
+        # Stable order: punctuation/spacing/symbols, numeric runs, then text.
+        for part in re.findall(r"\d+|\D", normalized_name.casefold()):
+            if part.isdecimal():
+                tokens.append((1, int(part), len(part)))
+            else:
+                group = 0 if unicodedata.category(part)[0] in "PZS" else 2
+                tokens.append((group, part))
+
+        return tuple(tokens), normalized_name, original_name
+
+    return sort_key
 
 
 def ensure_trainer_download_path_is_valid():
@@ -173,7 +217,23 @@ def findWeModInstallPath():
     return os.path.join(os.environ["LOCALAPPDATA"], "WeMod")
 
 
-def findCEInstallPath():
+def findCEInstallPath(gcm=False):
+    # Cheat Engine downloaded through GCM lives in the trainer download path like any other entry
+    download_path = settings.get("downloadPath", "")
+    if download_path and os.path.isdir(download_path):
+        try:
+            for entry in sorted(os.scandir(download_path), key=lambda dirent: dirent.name):
+                if entry.name == TRAINER_BACKUP_DIRECTORY:
+                    continue
+                if entry.is_dir() and os.path.isfile(os.path.join(entry.path, CE_EXECUTABLE)):
+                    return os.path.normpath(entry.path)
+        except OSError as e:
+            print(f"Error scanning for Cheat Engine in download path: {str(e)}")
+
+    if gcm:
+        return ""
+
+    # Fall back to a system installation, preferring the newest version
     base_path = r'C:\Program Files'
     latest_version = []
     latest_path = ""
@@ -196,6 +256,16 @@ def findCEInstallPath():
     return latest_path
 
 
+def getCEExecutable():
+    cePath = settings.get("cePath", "")
+    if cePath:
+        ceExecutable = os.path.join(cePath, CE_EXECUTABLE)
+        if os.path.isfile(ceExecutable):
+            return ceExecutable
+
+    return ""
+
+
 setting_path = os.path.join(os.environ["APPDATA"], "GCM Settings")
 os.makedirs(setting_path, exist_ok=True)
 
@@ -205,9 +275,10 @@ os.makedirs(DATABASE_PATH, exist_ok=True)
 DOWNLOAD_TEMP_DIR = os.path.join(tempfile.gettempdir(), "GameCheatsManagerTemp", "download")
 VERSION_TEMP_DIR = os.path.join(tempfile.gettempdir(), "GameCheatsManagerTemp", "version")
 WEMOD_TEMP_DIR = os.path.join(tempfile.gettempdir(), "GameCheatsManagerTemp", "wemod")
+TRAINER_BACKUP_DIRECTORY = ".gcm-backup"
 
 wemod_install_path = findWeModInstallPath()
-ce_install_path = findCEInstallPath()
+CE_EXECUTABLE = "Cheat Engine.exe"
 
 settings = load_settings()
 tr = get_translator()
@@ -216,7 +287,8 @@ language_options = {
     "English (US)": "en_US",
     "简体中文": "zh_CN",
     "繁體中文": "zh_TW",
-    "Deutsch": "de_DE"
+    "Deutsch": "de_DE",
+    "Português (Brasil)": "pt_BR"
 }
 
 theme_options = {
@@ -233,7 +305,8 @@ font_config = {
     "en_US": resource_path("assets/NotoSans-Regular.ttf"),
     "zh_CN": resource_path("assets/NotoSansSC-Regular.ttf"),
     "zh_TW": resource_path("assets/NotoSansTC-Regular.ttf"),
-    "de_DE": resource_path("assets/NotoSans-Regular.ttf")
+    "de_DE": resource_path("assets/NotoSans-Regular.ttf"),
+    "pt_BR": resource_path("assets/NotoSans-Regular.ttf")
 }
 
 ensure_trainer_download_path_is_valid()
@@ -250,9 +323,14 @@ upArrow_path = resource_path("assets/up.png").replace("\\", "/")
 downArrow_path = resource_path("assets/down.png").replace("\\", "/")
 leftArrow_path = resource_path("assets/left.png").replace("\\", "/")
 rightArrow_path = resource_path("assets/right.png").replace("\\", "/")
-resourceHacker_path = resource_path("dependency/ResourceHacker.exe")
 unzip_path = resource_path("dependency/7z/7z.exe")
-binmay_path = resource_path("dependency/binmay.exe")
 emptyMidi_path = resource_path("dependency/TrainerBGM.mid")
 elevator_path = resource_path("dependency/Elevate.exe")
 updater_path = resource_path("Updater.exe")
+
+ARCHIVE_EXTENSIONS = (".zip", ".rar", ".7z")
+DEFAULT_TRAINER_EXTENSIONS = (".exe", ".ct", ".cetrainer")
+API_TIMEOUT = (10, 15)  # (connect, read) for every API call
+RETRY_STATUSES = (429, 500, 502, 503, 504, 520, 521, 522, 523, 524)  # transient, incl. Cloudflare's origin errors
+_SYSTEM_HAS_IPV6 = urllib3_connection.HAS_IPV6  # restored when the IPv4-only setting is turned off
+apply_ipv4_only()

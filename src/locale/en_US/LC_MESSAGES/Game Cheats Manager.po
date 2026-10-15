@@ -82,8 +82,8 @@ msgstr "Trainer download path:"
 msgid "Failure"
 msgstr "Failure"
 
-msgid "Failed to update application."
-msgstr "Failed to update application."
+msgid "Failed to update application"
+msgstr "Failed to update application"
 
 msgid "Update Available"
 msgstr "Update Available"
@@ -100,26 +100,41 @@ msgstr "Update Check Failed"
 msgid "Failed to check for software update. You can navigate to `Options` ➜ `About` to check for updates manually."
 msgstr "Failed to check for software update. You can navigate to `Options` ➜ `About` to check for updates manually."
 
+msgid "Attention"
+msgstr "Attention"
+
+msgid "Cheat Engine is already being downloaded, please wait for it to finish."
+msgstr "Cheat Engine is already being downloaded, please wait for it to finish."
+
 msgid "Cheat Engine Required"
 msgstr "Cheat Engine Required"
 
-msgid "Cheat Engine may not be installed on your system."
-msgstr "Cheat Engine may not be installed on your system."
+msgid ".ct/.cetrainer files can only be launched through Cheat Engine, but no Cheat Engine installation is currently set."
+msgstr ".ct/.cetrainer files can only be launched through Cheat Engine, but no Cheat Engine installation is currently set."
 
-msgid ".ct/.cetrainer files require Cheat Engine to run."
-msgstr ".ct/.cetrainer files require Cheat Engine to run."
+msgid "If you already have Cheat Engine installed, select its installation path under '{trainer_management} → Cheat Engine'."
+msgstr "If you already have Cheat Engine installed, select its installation path under '{trainer_management} → Cheat Engine'."
 
-msgid "Please download and install Cheat Engine, then make sure to open the file with Cheat Engine."
-msgstr "Please download and install Cheat Engine, then make sure to open the file with Cheat Engine."
+msgid "Otherwise, would you like to download Cheat Engine now?"
+msgstr "Otherwise, would you like to download Cheat Engine now?"
 
-msgid "Note: The official Cheat Engine installer contains promotional software bundles. Make sure to skip them during installation."
-msgstr "Note: The official Cheat Engine installer contains promotional software bundles. Make sure to skip them during installation."
+msgid "Yes"
+msgstr "Yes"
 
-msgid "Download from:"
-msgstr "Download from:"
+msgid "No"
+msgstr "No"
 
-msgid "Don't show again"
-msgstr "Don't show again"
+msgid "Success"
+msgstr "Success"
+
+msgid "Cheat Engine has already been downloaded in GCM, its installation path has been updated."
+msgstr "Cheat Engine has already been downloaded in GCM, its installation path has been updated."
+
+msgid "Error"
+msgstr "Error"
+
+msgid "Could not find Cheat Engine in the trainer database, please update GCM data and try again."
+msgstr "Could not find Cheat Engine in the trainer database, please update GCM data and try again."
 
 msgid "Delete trainer"
 msgstr "Delete trainer"
@@ -132,9 +147,6 @@ msgstr "Confirm"
 
 msgid "Cancel"
 msgstr "Cancel"
-
-msgid "Error"
-msgstr "Error"
 
 msgid "Trainer is currently in use, please close any programs using the file and try again."
 msgstr "Trainer is currently in use, please close any programs using the file and try again."
@@ -175,12 +187,6 @@ msgstr "Delete original trainers"
 msgid "Do you want to delete the original trainer files?"
 msgstr "Do you want to delete the original trainer files?"
 
-msgid "Yes"
-msgstr "Yes"
-
-msgid "No"
-msgstr "No"
-
 msgid "Failed to delete original trainer: "
 msgstr "Failed to delete original trainer: "
 
@@ -192,9 +198,6 @@ msgstr "To proceed with adding the trainer download paths to the Windows Defende
 
 msgid "Would you like to continue?"
 msgstr "Would you like to continue?"
-
-msgid "Success"
-msgstr "Success"
 
 msgid "Successfully added paths to Windows Defender whitelist."
 msgstr "Successfully added paths to Windows Defender whitelist."
@@ -238,11 +241,11 @@ msgstr "Search from CT success!"
 msgid "Search from GCM success!"
 msgstr "Search from GCM success!"
 
-msgid "Could not initialize the temporary download folder, please try turning your antivirus software off."
-msgstr "Could not initialize the temporary download folder, please try turning your antivirus software off."
+msgid "Could not prepare the temporary download folder. Check its permissions and your antivirus software."
+msgstr "Could not prepare the temporary download folder. Check its permissions and your antivirus software."
 
-msgid "Attention"
-msgstr "Attention"
+msgid "An error occurred when installing trainer: "
+msgstr "An error occurred when installing trainer: "
 
 msgid ""
 "This trainer requires additional setup before use. Please check the opened folder for instructions.\n"
@@ -251,14 +254,26 @@ msgstr ""
 "This trainer requires additional setup before use. Please check the opened folder for instructions.\n"
 "The instructions are always stored in the 'gcm-instructions' folder."
 
-msgid "An error occurred when moving trainer: "
-msgstr "An error occurred when moving trainer: "
-
 msgid "Download success!"
 msgstr "Download success!"
 
-msgid "An error occurred while downloading trainer: "
-msgstr "An error occurred while downloading trainer: "
+msgid "Could not prepare the downloaded trainer. Please try again and check your antivirus software."
+msgstr "Could not prepare the downloaded trainer. Please try again and check your antivirus software."
+
+msgid "The downloaded archive is invalid or incomplete. Your antivirus software may have blocked or removed it."
+msgstr "The downloaded archive is invalid or incomplete. Your antivirus software may have blocked or removed it."
+
+msgid "Could not install the trainer files. Close any running trainer and check your antivirus software."
+msgstr "Could not install the trainer files. Close any running trainer and check your antivirus software."
+
+msgid "Could not create a complete trainer backup. The existing installation was not changed. Your antivirus software may have interfered."
+msgstr "Could not create a complete trainer backup. The existing installation was not changed. Your antivirus software may have interfered."
+
+msgid "Could not remove the existing trainer. Close it if it is running, check your antivirus software, and try again."
+msgstr "Could not remove the existing trainer. Close it if it is running, check your antivirus software, and try again."
+
+msgid "The previous trainer installation could not be fully restored. Check your antivirus quarantine and the '.gcm-backup' folder."
+msgstr "The previous trainer installation could not be fully restored. Check your antivirus quarantine and the '.gcm-backup' folder."
 
 msgid "Internet request failed."
 msgstr "Internet request failed."
@@ -278,14 +293,20 @@ msgstr "Decompressing..."
 msgid "An error occurred while extracting downloaded trainer: "
 msgstr "An error occurred while extracting downloaded trainer: "
 
-msgid "Could not find the downloaded trainer file, please try turning your antivirus software off."
-msgstr "Could not find the downloaded trainer file, please try turning your antivirus software off."
-
 msgid "Removing trainer background music..."
 msgstr "Removing trainer background music..."
 
+msgid "Trainer files are missing or incomplete. Your antivirus software may have removed them."
+msgstr "Trainer files are missing or incomplete. Your antivirus software may have removed them."
+
+msgid "Could not remove trainer background music."
+msgstr "Could not remove trainer background music."
+
 msgid "Patching..."
 msgstr "Patching..."
+
+msgid "Preparing update"
+msgstr "Preparing update"
 
 msgid "Update from GCM failed"
 msgstr "Update from GCM failed"
@@ -340,17 +361,15 @@ msgstr ""
 "Wand is currently running,\n"
 "please close the application first"
 
-msgid "Failed to patch file:"
-msgstr "Failed to patch file:"
-
-msgid "Failed to extract file:"
-msgstr "Failed to extract file:"
+msgid ""
+"Could not close Wand,\n"
+"please close the application manually"
+msgstr ""
+"Could not close Wand,\n"
+"please close the application manually"
 
 msgid "Wand Pro activated"
 msgstr "Wand Pro activated"
-
-msgid "Failed to activate Wand Pro"
-msgstr "Failed to activate Wand Pro"
 
 msgid "Wand Pro disabled"
 msgstr "Wand Pro disabled"
@@ -376,6 +395,9 @@ msgstr "Deleted Wand version: "
 
 msgid "Failed to delete Wand version: "
 msgstr "Failed to delete Wand version: "
+
+msgid "Failed to patch file:"
+msgstr "Failed to patch file:"
 
 msgid "Checking for trainer updates"
 msgstr "Checking for trainer updates"
@@ -409,6 +431,9 @@ msgstr "GitHub: "
 msgid "Bilibili: "
 msgstr "Bilibili: "
 
+msgid "Don't show again"
+msgstr "Don't show again"
+
 msgid "Theme:"
 msgstr "Theme:"
 
@@ -421,17 +446,14 @@ msgstr "Launch app on system startup"
 msgid "Check for software update at startup"
 msgstr "Check for software update at startup"
 
-msgid "Use safe launch path (may fix trainers unable to launch)"
-msgstr "Use safe launch path (may fix trainers unable to launch)"
-
 msgid "Always show search results in English"
 msgstr "Always show search results in English"
 
 msgid "Sort search results by origin"
 msgstr "Sort search results by origin"
 
-msgid "Update trainer translations automatically"
-msgstr "Update trainer translations automatically"
+msgid "Use IPv4 only for network connections"
+msgstr "Use IPv4 only for network connections"
 
 msgid "Apply"
 msgstr "Apply"
@@ -457,50 +479,50 @@ msgstr "Update Now"
 msgid "Failed to load"
 msgstr "Failed to load"
 
-msgid "Contact Info (Optional):"
-msgstr "Contact Info (Optional):"
-
 msgid "Email"
 msgstr "Email"
+
+msgid "Contact Info (Optional):"
+msgstr "Contact Info (Optional):"
 
 msgid "If you provide your Game-Zone Labs account email and your trainer is approved, a badge will be added to your account"
 msgstr "If you provide your Game-Zone Labs account email and your trainer is approved, a badge will be added to your account"
 
+msgid "What game does it work for"
+msgstr "What game does it work for"
+
 msgid "Trainer Name:"
 msgstr "Trainer Name:"
 
-msgid "What game does it work for"
-msgstr "What game does it work for"
+msgid "Original URL and author"
+msgstr "Original URL and author"
 
 msgid "Trainer Source (Optional):"
 msgstr "Trainer Source (Optional):"
 
-msgid "Original URL or author"
-msgstr "Original URL or author"
-
-msgid "If you made the trainer, please provide your author name"
-msgstr "If you made the trainer, please provide your author name"
-
-msgid "Trainer File:"
-msgstr "Trainer File:"
+msgid "Please fill this in if possible to speed up the review process. If you made the trainer, please provide your author name"
+msgstr "Please fill this in if possible to speed up the review process. If you made the trainer, please provide your author name"
 
 msgid "Select a trainer file"
 msgstr "Select a trainer file"
 
+msgid "Trainer File:"
+msgstr "Trainer File:"
+
 msgid "If the trainer consists of multiple files, please compress them into a single archive (zip/rar/7z) before uploading"
 msgstr "If the trainer consists of multiple files, please compress them into a single archive (zip/rar/7z) before uploading"
-
-msgid "Additional Notes:"
-msgstr "Additional Notes:"
 
 msgid "Anything else to add..."
 msgstr "Anything else to add..."
 
+msgid "Additional Notes (Optional):"
+msgstr "Additional Notes (Optional):"
+
 msgid "Please make sure the trainer you are about to upload is tested to be safe and functional."
 msgstr "Please make sure the trainer you are about to upload is tested to be safe and functional."
 
-msgid "For more info about trainer uploading, please join the QQ group to discuss: 186859946."
-msgstr "For more info about trainer uploading, please join the QQ group to discuss: 186859946."
+msgid "Beyond trainers, you can upload other types of files, such as mods, tools, guides, or any other game-related resources. Please ensure instructions are provided for how to use them."
+msgstr "Beyond trainers, you can upload other types of files, such as mods, tools, guides, or any other game-related resources. Please ensure instructions are provided for how to use them."
 
 msgid "Upload"
 msgstr "Upload"
@@ -532,8 +554,29 @@ msgstr "Update GCM data automatically"
 msgid "Update GCM and Community trainers automatically"
 msgstr "Update GCM and Community trainers automatically"
 
+msgid "Global Settings"
+msgstr "Global Settings"
+
+msgid "Update trainer translations automatically"
+msgstr "Update trainer translations automatically"
+
+msgid "Launch trainers as administrator"
+msgstr "Launch trainers as administrator"
+
+msgid "Use safe launch path"
+msgstr "Use safe launch path"
+
+msgid "May fix trainers unable to launch"
+msgstr "May fix trainers unable to launch"
+
+msgid "Enable search for FLiNG trainers"
+msgstr "Enable search for FLiNG trainers"
+
 msgid "Remove trainer background music"
 msgstr "Remove trainer background music"
+
+msgid "Only works when downloading"
+msgstr "Only works when downloading"
 
 msgid "Update FLiNG data automatically"
 msgstr "Update FLiNG data automatically"
@@ -546,6 +589,9 @@ msgstr "Enable search for XiaoXing trainers"
 
 msgid "Unlock all functions"
 msgstr "Unlock all functions"
+
+msgid "Only works when downloading, and only for some trainers"
+msgstr "Only works when downloading, and only for some trainers"
 
 msgid "Update XiaoXing data automatically"
 msgstr "Update XiaoXing data automatically"
@@ -573,6 +619,9 @@ msgstr "Update Cheat Table data automatically"
 
 msgid "Update Cheat Tables automatically"
 msgstr "Update Cheat Tables automatically"
+
+msgid "Launch Cheat Tables as administrator"
+msgstr "Launch Cheat Tables as administrator"
 
 msgid "Wand installation path:"
 msgstr "Wand installation path:"
@@ -609,6 +658,12 @@ msgstr "Cheat Engine is installed"
 
 msgid "Wand not installed"
 msgstr "Wand not installed"
+
+msgid "Wand is currently running and must be closed before patching."
+msgstr "Wand is currently running and must be closed before patching."
+
+msgid "Would you like to close it now?"
+msgstr "Would you like to close it now?"
 
 msgid "To proceed with adding translation files, administrator rights are needed. A User Account Control (UAC) prompt will appear for permission."
 msgstr "To proceed with adding translation files, administrator rights are needed. A User Account Control (UAC) prompt will appear for permission."

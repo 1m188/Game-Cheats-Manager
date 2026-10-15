@@ -3,6 +3,7 @@
 #include <shlobj.h>
 #include <cstdlib>
 #include <FL/Fl_Table.H>
+#include <FL/fl_ask.H>
 
 using json = nlohmann::json;
 
@@ -65,6 +66,19 @@ struct WidgetPair
     Fl_Widget *button; // Fl_Check_Button* or Fl_Button*
     Fl_Input *input;   // nullptr if input not created
 };
+
+// Every option toggle created by place_toggle_widget, in creation order
+std::vector<Fl_Check_Button *> option_toggles;
+
+// True only while turn_off_all_toggles() is running
+bool trainer_closing = false;
+
+/// fl_alert that stays quiet while the trainer is shutting down
+void trainer_alert(const std::string &message)
+{
+    if (!trainer_closing)
+        fl_alert("%s", message.c_str());
+}
 
 // Structure to hold callback data for info buttons
 struct InfoCallbackData
@@ -204,8 +218,6 @@ void setupLanguage()
 
 void change_language(const std::string &lang, Fl_Group *group)
 {
-    group->hide();
-
     for (const auto &[child, key] : translatable_widgets)
     {
         auto lang_translations = translations.find(lang);
@@ -236,14 +248,17 @@ void change_language(const std::string &lang, Fl_Group *group)
                 Fl_Flex *parent_flex = dynamic_cast<Fl_Flex *>(child->parent());
                 if (parent_flex)
                 {
-                    parent_flex->fixed(child, fl_width(child->label()));
+                    // measure_label() uses the label's own font; fl_width() would use whatever the
+                    // graphics state was last left in, and this runs from a callback, not draw().
+                    int label_w = 0, label_h = 0;
+                    child->measure_label(label_w, label_h);
+                    parent_flex->fixed(child, label_w);
                 }
             }
         }
     }
 
     group->redraw();
-    group->show();
     language = lang;
     saveSettings();
 }
@@ -363,6 +378,25 @@ void set_input_values(Fl_Input *input, std::string def, std::string min, std::st
     input->callback(input_callback, (void *)constraints);
 }
 
+/// FLTK draws an FL_ALIGN_INSIDE label unclipped but redraw_label() only invalidates the widget's
+/// own box, so overflow keeps the colour it last had. Invalidate what the text actually covers.
+void invalidate_label(Fl_Widget *widget)
+{
+    if (!widget)
+        return;
+
+    Fl_Window *window = widget->window();
+    if (!window)
+        return;
+
+    int label_w = 0, label_h = 0;
+    widget->measure_label(label_w, label_h);
+
+    const int w = (label_w > widget->w() ? label_w : widget->w()) + 2;
+    const int h = (label_h > widget->h() ? label_h : widget->h()) + 2;
+    window->damage(FL_DAMAGE_ALL, widget->x(), widget->y(), w, h);
+}
+
 // Function to periodically check process status and update GUI
 void check_process_status(void *data)
 {
@@ -396,6 +430,9 @@ void check_process_status(void *data)
     process_id->copy_label(processIdStr.c_str());
     process_id->labelcolor(FL_WHITE);
     process_id->labelsize(font_size);
+
+    invalidate_label(process_exe);
+    invalidate_label(process_id);
 
     if (!running)
     {
@@ -616,7 +653,7 @@ void info_callback(Fl_Widget *widget, void *data)
 
     if (!trainer->isProcessRunning())
     {
-        fl_alert(t("Please run the game first."));
+        trainer_alert(t("Please run the game first."));
         return;
     }
 
@@ -772,11 +809,29 @@ Fl_Check_Button *place_toggle_widget(
 
     ToggleData *toggle_data = new ToggleData{trainer, optionName, check_button, input};
     check_button->callback(toggle_callback, toggle_data);
+    option_toggles.push_back(check_button);
 
     toggle_flex->end();
     parent_flex->fixed(toggle_flex, UI_OPTION_HEIGHT);
 
     return check_button;
+}
+
+// Switches every toggle option back off through its own toggle callback.
+void turn_off_all_toggles()
+{
+    trainer_closing = true;
+
+    for (Fl_Check_Button *check_button : option_toggles)
+    {
+        if (!check_button->value())
+            continue;
+
+        check_button->value(0);
+        check_button->do_callback();
+    }
+
+    trainer_closing = false;
 }
 
 Fl_Button *place_apply_widget(
