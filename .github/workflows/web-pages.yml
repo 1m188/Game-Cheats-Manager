@@ -1,0 +1,88 @@
+name: Deploy web (FLiNG trainer search) → GitHub Pages
+# 纯静态 Web 版部署工作流。
+#
+# 产物: 把 web/ 原样发布为 GitHub Pages 站点(相对路径资源,无需加载任何 npm 依赖)。
+# 每次:
+#   1. 在 Runner 上重新构建基线索引(npm run build:index,抓取 flingtrainer.com);
+#   2. 回归校验(npm run verify,含在线增量层);
+#   3. 构建或校验失败 → 还原为仓库内提交过的数据快照再发布,绝不发布残缺索引;
+#   4. 经官方 Page Actions 上传与部署。运行时的在线增量层(refresh.js)始终兜底新旧衔接。
+#
+# 先决条件(一次性,仓库管理员在网页上操作):
+#   Settings → Pages → Build and deployment → Source 选择 "GitHub Actions"。
+#
+# 触发: web/** 内容推送;工作流文件自身变更;每周日 03:07 UTC 刷新索引的保底 cron;手动。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/web-pages.yml"
+  schedule:
+    - cron: "7 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 与 Pages 附带的并发组对齐: 同一次排队,新旧部署互不打断
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # 重抓两个来源页并生成 data/*(Node fetch 直连,无浏览器 CORS 约束)
+      - name: Rebuild baseline index
+        id: build
+        continue-on-error: true
+        working-directory: web
+        run: npm run build:index
+
+      # 数据一致性 + 搜索内核 + 在线增量层校验
+      # (在线部分内部已对"站点不可达"做了跳过,不会因外网抖动误判)
+      - name: Verify data + kernel + refresh layer
+        id: verify
+        continue-on-error: true
+        working-directory: web
+        run: npm run verify
+
+      # 任一步失败 → 本次只发布仓库里提交过的快照数据
+      - name: Rollback data on build/verify failure
+        if: steps.build.outcome == 'failure' || steps.verify.outcome == 'failure'
+        run: |
+          git restore web/data/ 2>/dev/null || true
+          echo "::warning::索引刷新未通过校验,本次部署使用仓库内快照数据(运行时增量层会继续补新条目)"
+
+      # 站点为纯静态资源,禁用 Jekyll 处理避免特殊文件被吞
+      - name: Disable Jekyll
+        run: touch web/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
