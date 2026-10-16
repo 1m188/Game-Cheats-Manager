@@ -1,6 +1,7 @@
 import ctypes
 from ctypes import wintypes
 import hashlib
+import json
 import os
 from queue import Queue
 import shutil
@@ -9,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 import webbrowser
-import winreg
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
@@ -19,13 +19,15 @@ from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtSvgWidgets import QSvgWidget
 
 import style_sheet
-from widgets.custom_dialogs import *
-from widgets.custom_widgets import *
-from widgets.trainer_management import *
-from threads.download_display_thread import *
-from threads.download_trainers_thread import *
-from threads.other_threads import *
-from threads.update_trainers_thread import *
+from config import *
+from widgets.custom_dialogs import AboutDialog, AnnouncementDialog, CopyRightWarning, SettingsDialog, TrainerUploadDialog
+from widgets.custom_widgets import CustomButton, LargerActionIconStyle, MultilingualListWidget, SegmentedProgressBar, StatusMessageWidget, ToastNotification, WrappedMessageDelegate
+from widgets.trainer_management import TrainerManagementDialog
+from threads.download_base_thread import DownloadBaseThread
+from threads.download_display_thread import DownloadDisplayThread
+from threads.download_trainers_thread import DownloadTrainersThread
+from threads.other_threads import AnnouncementFetchWorker, FetchCTData, FetchFlingData, FetchGCMData, FetchTrainerTranslations, FetchXiaoXingData, PathChangeThread, UpdateWorker, VersionFetchWorker
+from threads.update_trainers_thread import UpdateTrainers
 
 
 class GameCheatsManager(QMainWindow):
@@ -52,7 +54,7 @@ class GameCheatsManager(QMainWindow):
         self.bilibiliLink = "https://space.bilibili.com/256673766"
 
         # Variable management
-        self.trainerSearchEntryPrompt = tr("Search for installed trainers")
+        self.installedSearchEntryPrompt = tr("Search for installed trainers")
         self.downloadSearchEntryPrompt = tr("Enter keywords to download trainers")
         self.trainerDownloadPath = os.path.normpath(settings["downloadPath"])
 
@@ -62,13 +64,18 @@ class GameCheatsManager(QMainWindow):
         self.downloadQueue = Queue()
         self.downloadProgressBar = None
         self.downloadProgressLabel = None
+        self.downloadProgressItem = None
         self.currentlyDownloading = False
+        self.downloadingCE = False  # Cheat Engine download queued or in progress
+        self.lastInstalledTrainers = []  # highlighted in the installed list once the download ends
         self.currentlyUpdatingTrainers = False
+        self.trainerUpdatePending = False  # an interval's trainer update, waiting for its data fetches to finish
         self.currentlyUpdatingGCM = False
         self.currentlyUpdatingFling = False
         self.currentlyUpdatingXiaoXing = False
         self.currentlyUpdatingCT = False
         self.currentlyUpdatingTrans = False
+        self.currentlyUpdatingApp = False
 
         # Window references
         self.settings_window = None
@@ -123,7 +130,7 @@ class GameCheatsManager(QMainWindow):
         dataMenu.addAction(updateTrainerSearchData)
 
         updateTrainers = QAction(tr("Update Trainers"), self)
-        updateTrainers.triggered.connect(self.update_trainers)
+        updateTrainers.triggered.connect(lambda: self.update_trainers(auto_check=False))
         dataMenu.addAction(updateTrainers)
 
         # Trainer management menu
@@ -153,26 +160,26 @@ class GameCheatsManager(QMainWindow):
         mainLayout.addLayout(trainersLayout, 0, 0)
 
         # Search installed trainers
-        trainerSearchLayout = QHBoxLayout()
-        trainerSearchLayout.setSpacing(10)
-        trainerSearchLayout.setContentsMargins(20, 0, 20, 0)
-        trainersLayout.addLayout(trainerSearchLayout)
+        installedSearchLayout = QHBoxLayout()
+        installedSearchLayout.setSpacing(10)
+        installedSearchLayout.setContentsMargins(20, 0, 20, 0)
+        trainersLayout.addLayout(installedSearchLayout)
 
         searchSvg = '<svg xmlns="http://www.w3.org/2000/svg" height="10" viewBox="0 0 512 512"><path fill="gray" d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/></svg>'
         searchSvgWidget = QSvgWidget()
         searchSvgWidget.renderer().load(searchSvg.encode('utf-8'))
         searchSvgWidget.setFixedSize(22, 22)
-        trainerSearchLayout.addWidget(searchSvgWidget)
+        installedSearchLayout.addWidget(searchSvgWidget)
 
-        self.trainerSearchEntry = QLineEdit()
-        trainerSearchLayout.addWidget(self.trainerSearchEntry)
-        self.trainerSearchEntry.setPlaceholderText(self.trainerSearchEntryPrompt)
-        self.trainerSearchEntry.textChanged.connect(self.update_list)
+        self.installedSearchEntry = QLineEdit()
+        installedSearchLayout.addWidget(self.installedSearchEntry)
+        self.installedSearchEntry.setPlaceholderText(self.installedSearchEntryPrompt)
+        self.installedSearchEntry.textChanged.connect(self.update_list)
 
         # Display installed trainers
-        self.flingListBox = MultilingualListWidget()
-        self.flingListBox.itemActivated.connect(self.launch_trainer)
-        trainersLayout.addWidget(self.flingListBox)
+        self.installedListBox = MultilingualListWidget()
+        self.installedListBox.itemActivated.connect(self.launch_trainer)
+        trainersLayout.addWidget(self.installedListBox)
 
         # Launch and delete buttons
         bottomLayout = QHBoxLayout()
@@ -227,6 +234,7 @@ class GameCheatsManager(QMainWindow):
 
         # Display trainer search results
         self.downloadListBox = MultilingualListWidget()
+        self.downloadListBox.setItemDelegate(WrappedMessageDelegate(self.downloadListBox))
         self.downloadListBox.itemActivated.connect(self.on_download_start)
         downloadsLayout.addWidget(self.downloadListBox)
 
@@ -290,22 +298,35 @@ class GameCheatsManager(QMainWindow):
         self.announcementFetcher.quit()
 
     def start_update(self, version):
+        if self.currentlyUpdatingApp:
+            return
+
+        self.currentlyUpdatingApp = True
+        s3_path = f'GCM/Game Cheats Manager Setup {version}.exe'
+        self.updateWorker = UpdateWorker(s3_path, self)
+        self.updateWorker.message.connect(self.on_status_load)
+        self.updateWorker.update.connect(self.on_status_update)
+        self.updateWorker.urlFetched.connect(lambda url: self.launch_updater(s3_path, url))
+        self.updateWorker.finished.connect(self.on_interval_finished)
+        self.updateWorker.start()
+
+    def launch_updater(self, s3_path, signed_url):
         try:
             pid = str(os.getpid())
-            s3_path = f'GCM/Game Cheats Manager Setup {version}.exe'
-            params = f'--pid {pid} --s3-path "{s3_path}" --theme {settings["theme"]} --language {settings["language"]}'
+            params = (f'--pid {pid} --s3-path "{s3_path}" --url "{signed_url}"'
+                      f' --theme {settings["theme"]} --language {settings["language"]}')
             result = ctypes.windll.shell32.ShellExecuteW(0, "runas", updater_path, params, None, 1)
             if result <= 32:
                 raise OSError(f"ShellExecuteW failed with code {result}")
 
         except OSError:
-            QMessageBox.critical(self, tr("Failure"), tr("Failed to update application."))
+            QMessageBox.critical(self, tr("Failure"), tr("Failed to update application"))
 
     def send_notification(self, success, latest_version=0):
         # Keep a reference to prevent garbage collection
         self._active_toast = None
 
-        if success and latest_version > APP_VERSION:
+        if success and is_newer_version(latest_version):
             title = tr('Update Available')
             message = tr('New version found: {old_version} ➜ {new_version}').format(
                 old_version=APP_VERSION,
@@ -339,6 +360,11 @@ class GameCheatsManager(QMainWindow):
         elif settings["theme"] == "light":
             style = style_sheet.white
 
+        # Ties the native title bar to the app theme; it otherwise follows the Windows theme
+        QApplication.styleHints().setColorScheme(
+            Qt.ColorScheme.Dark if settings["theme"] == "dark" else Qt.ColorScheme.Light
+        )
+
         style = style.format(
             check_mark=checkMark_path,
             drop_down_arrow=dropDownArrow_path,
@@ -370,44 +396,45 @@ class GameCheatsManager(QMainWindow):
     def disable_all_widgets(self):
         self.downloadSearchEntry.setEnabled(False)
         self.fileDialogButton.setEnabled(False)
-        self.trainerSearchEntry.setEnabled(False)
+        self.installedSearchEntry.setEnabled(False)
         self.launchButton.setEnabled(False)
         self.deleteButton.setEnabled(False)
 
     def enable_all_widgets(self):
         self.downloadSearchEntry.setEnabled(True)
         self.fileDialogButton.setEnabled(True)
-        self.trainerSearchEntry.setEnabled(True)
+        self.installedSearchEntry.setEnabled(True)
         self.launchButton.setEnabled(True)
         self.deleteButton.setEnabled(True)
 
     def update_list(self):
-        search_text = self.trainerSearchEntry.text().lower()
+        search_text = self.installedSearchEntry.text().lower()
         if search_text == "":
             self.show_cheats()
             return
 
-        self.flingListBox.clear()
+        self.installedListBox.clear()
         for trainerName in self.trainers.keys():
             if search_text in trainerName.lower():
-                self.flingListBox.addItem(trainerName)
+                self.installedListBox.addItem(trainerName)
 
     def show_cheats(self):
-        self.flingListBox.clear()
+        self.installedListBox.clear()
         self.trainers = {}
-        sort_key_func = sort_trainers_key if settings["sortByOrigin"] else sort_trainers_key_ignore_prefix
         entries = sorted(
             os.scandir(self.trainerDownloadPath),
-            key=lambda dirent: sort_key_func(dirent.name)
+            key=trainer_sort_key(lambda dirent: dirent.name, ignore_prefix=not settings["sortByOrigin"])
         )
-        default_extensions = [".exe", ".ct", ".cetrainer"]
 
         for trainer in entries:
+            if trainer.name == TRAINER_BACKUP_DIRECTORY:
+                continue
+
             trainerPath = os.path.normpath(trainer.path)
             if os.path.isfile(trainerPath):
                 trainerName, trainerExt = os.path.splitext(os.path.basename(trainerPath))
-                if trainerExt.lower() in default_extensions and os.path.getsize(trainerPath) != 0:
-                    self.flingListBox.addItem(trainerName)
+                if trainerExt.lower() in DEFAULT_TRAINER_EXTENSIONS and os.path.getsize(trainerPath) != 0:
+                    self.installedListBox.addItem(trainerName)
                     self.trainers[trainerName] = trainerPath
             else:
                 exe_exclusions = ["flashplayer_22.0.0.210_ax_debug.exe"]
@@ -415,25 +442,25 @@ class GameCheatsManager(QMainWindow):
 
                 # Check gcm_info.json for custom extension
                 gcm_info_path = os.path.join(trainerPath, "gcm_info.json")
-                custom_ext = None
+                custom_ext = ""
                 if os.path.exists(gcm_info_path):
                     with open(gcm_info_path, 'r', encoding='utf-8') as f:
-                        custom_ext = json.load(f).get("extension")
+                        custom_ext = json.load(f).get("extension", "").strip()
 
                 # Determine target extensions: use custom if specified, otherwise defaults
-                if custom_ext == "none":
-                    self.flingListBox.addItem(trainerName)
+                if custom_ext.lower() == "none":
+                    self.installedListBox.addItem(trainerName)
                     self.trainers[trainerName] = trainerPath
                     continue
 
                 matched_path = None
-                if custom_ext and "." in custom_ext:
-                    # Full filename specified — resolve directly
+                if "." in custom_ext:
+                    # A file name, optionally nested (e.g. "bin/Trainer.exe") — resolve directly
                     candidate = os.path.normpath(os.path.join(trainerPath, custom_ext))
                     if os.path.isfile(candidate):
                         matched_path = candidate
                 else:
-                    target_exts = ["." + custom_ext] if custom_ext else default_extensions
+                    target_exts = ("." + custom_ext.lower(),) if custom_ext else DEFAULT_TRAINER_EXTENSIONS
                     for ext in target_exts:
                         for file in os.scandir(trainerPath):
                             if file.is_file() and os.path.splitext(file.name)[1].lower() == ext and file.name not in exe_exclusions:
@@ -443,10 +470,10 @@ class GameCheatsManager(QMainWindow):
                             break
 
                 if matched_path:
-                    self.flingListBox.addItem(trainerName)
+                    self.installedListBox.addItem(trainerName)
                     self.trainers[trainerName] = matched_path
                 elif os.path.exists(gcm_info_path):
-                    self.flingListBox.addItem(trainerName)
+                    self.installedListBox.addItem(trainerName)
                     self.trainers[trainerName] = trainerPath
 
     def cleanup_launch_junctions(self):
@@ -462,11 +489,11 @@ class GameCheatsManager(QMainWindow):
         except Exception as e:
             print(f"Error during junction cleanup: {e}")
 
-    def get_ascii_launch_path(self, original_exe_path):
+    def get_ascii_launch_path(self, original_path):
         # 1. Check if the entire path is already purely ASCII
         try:
-            original_exe_path.encode('ascii')
-            return original_exe_path
+            original_path.encode('ascii')
+            return original_path
         except UnicodeEncodeError:
             pass
 
@@ -475,10 +502,10 @@ class GameCheatsManager(QMainWindow):
         _GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
         _GetShortPathNameW.restype = wintypes.DWORD
 
-        output_buf_size = _GetShortPathNameW(original_exe_path, None, 0)
+        output_buf_size = _GetShortPathNameW(original_path, None, 0)
         if output_buf_size > 0:
             output_buf = ctypes.create_unicode_buffer(output_buf_size)
-            _GetShortPathNameW(original_exe_path, output_buf, output_buf_size)
+            _GetShortPathNameW(original_path, output_buf, output_buf_size)
             short_path = output_buf.value
             try:
                 short_path.encode('ascii')
@@ -488,12 +515,12 @@ class GameCheatsManager(QMainWindow):
 
         # 3. Ultimate Fallback: Unique Directory Junction in %TEMP%
         temp_dir = tempfile.gettempdir()
-        exe_dir = os.path.dirname(original_exe_path)
-        original_exe_name = os.path.basename(original_exe_path)
+        original_dir = os.path.dirname(original_path)
+        original_name = os.path.basename(original_path)
 
         # Create a short, stable hash of the directory path to prevent collisions
         # e.g., "GCM_Launch_8a4f9b2c"
-        path_hash = hashlib.md5(exe_dir.encode('utf-8')).hexdigest()[:8]
+        path_hash = hashlib.md5(original_dir.encode('utf-8')).hexdigest()[:8]
         junction_dir = os.path.join(temp_dir, f"GCM_Launch_{path_hash}")
 
         # Remove old junction if it exists
@@ -506,76 +533,96 @@ class GameCheatsManager(QMainWindow):
         # If it doesn't exist (or was successfully removed), create the new junction
         if not os.path.exists(junction_dir):
             try:
-                command = f'mklink /J "{junction_dir}" "{exe_dir}"'
+                command = f'mklink /J "{junction_dir}" "{original_dir}"'
                 subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception as e:
                 print(f"Failed to create ASCII junction fallback: {e}")
-                return original_exe_path
+                return original_path
 
-        return os.path.join(junction_dir, original_exe_name)
-
-    def is_cheat_engine_available(self, ext):
-        # 1. Check Windows 10/11 UserChoice (When user selects "Always use this app")
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice") as key:
-                prog_id, _ = winreg.QueryValueEx(key, "ProgId")
-
-            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{prog_id}\shell\open\command") as cmd_key:
-                command, _ = winreg.QueryValueEx(cmd_key, "")
-
-            if command and "cheatengine" in command.lower().replace(" ", ""):
-                return True
-        except (FileNotFoundError, OSError):
-            pass
-
-        # 2. Check Standard ProgID
-        try:
-            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, ext) as key:
-                prog_id, _ = winreg.QueryValueEx(key, "")
-
-            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, rf"{prog_id}\shell\open\command") as cmd_key:
-                command, _ = winreg.QueryValueEx(cmd_key, "")
-
-            if command and "cheatengine" in command.lower().replace(" ", ""):
-                return True
-        except (FileNotFoundError, OSError):
-            pass
-
-        return False
+        return os.path.join(junction_dir, original_name)
 
     def prompt_cheat_engine_install(self):
-        msg_box = QMessageBox(self)
-        msg_box.setIcon(QMessageBox.Icon.Warning)
-        msg_box.setWindowTitle(tr("Cheat Engine Required"))
-        msg_box.setText(
-            tr("Cheat Engine may not be installed on your system.") + "<br><br>" +
-            tr(".ct/.cetrainer files require Cheat Engine to run.") + " " +
-            tr("Please download and install Cheat Engine, then make sure to open the file with Cheat Engine.") + "<br><br>" +
-            tr("Note: The official Cheat Engine installer contains promotional software bundles. Make sure to skip them during installation.") + "<br><br>" +
-            tr("Download from:") + ' <a href="https://www.cheatengine.org">https://www.cheatengine.org</a>'
+        if self.downloadingCE:
+            QMessageBox.information(self, tr("Attention"), tr("Cheat Engine is already being downloaded, please wait for it to finish."))
+            return
+
+        msg_box = QMessageBox(
+            QMessageBox.Icon.Question,
+            tr("Cheat Engine Required"),
+            tr(".ct/.cetrainer files can only be launched through Cheat Engine, but no Cheat Engine installation is currently set.") + "\n\n" +
+            tr("If you already have Cheat Engine installed, select its installation path under '{trainer_management} → Cheat Engine'.").format(trainer_management=tr("Trainer Management")) + "\n\n" +
+            tr("Otherwise, would you like to download Cheat Engine now?"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            self
         )
-        msg_box.setTextFormat(Qt.TextFormat.RichText)
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        ok_button = msg_box.button(QMessageBox.StandardButton.Ok)
-        ok_button.setText("OK")
-        dontShowCheckbox = QCheckBox(tr("Don't show again"))
-        dontShowCheckbox.setStyleSheet("margin-top: 10px;")
-        msg_box.setCheckBox(dontShowCheckbox)
-        msg_box.exec()
-        if dontShowCheckbox.isChecked():
-            settings["showCEPrompt"] = False
-            apply_settings(settings)
+
+        yes_button = msg_box.button(QMessageBox.StandardButton.Yes)
+        yes_button.setText(tr("Yes"))
+        no_button = msg_box.button(QMessageBox.StandardButton.No)
+        no_button.setText(tr("No"))
+        reply = msg_box.exec()
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.download_cheat_engine()
+
+    def download_cheat_engine(self):
+        # A copy downloaded earlier is adopted instead of downloaded again
+        existingPath = findCEInstallPath(gcm=True)
+        if existingPath:
+            self.on_cheat_engine_installed(existingPath)
+            QMessageBox.information(self, tr("Success"), tr("Cheat Engine has already been downloaded in GCM, its installation path has been updated."))
+            return
+
+        ce_entry = DownloadBaseThread.find_cheat_engine_entry()
+        if not ce_entry or not ce_entry.get("url"):
+            QMessageBox.critical(self, tr("Error"), tr("Could not find Cheat Engine in the trainer database, please update GCM data and try again."))
+            return
+
+        # Appended so the indexes of any listed search results stay valid
+        DownloadBaseThread.trainer_urls.append(ce_entry)
+        self.enqueue_download(len(DownloadBaseThread.trainer_urls) - 1, self.trainers, self.trainerDownloadPath, None)
+
+    def on_cheat_engine_installed(self, cePath):
+        settings["cePath"] = os.path.normpath(cePath)
+        apply_settings(settings)
+
+        if self.trainer_manage_window is not None and self.trainer_manage_window.isVisible():
+            self.trainer_manage_window.ceInstallLineEdit.setText(settings["cePath"])
+            self.trainer_manage_window.checkCEInstallStatus()
 
     def launch_trainer(self):
         try:
-            selection = self.flingListBox.currentRow()
+            selection = self.installedListBox.currentRow()
             if selection != -1:
-                trainerName = self.flingListBox.item(selection).text()
+                trainerName = self.installedListBox.item(selection).text()
                 originalPath = os.path.normpath(self.trainers[trainerName])
 
                 # Folder-only trainer (no launchable file) — open the folder
                 if os.path.isdir(originalPath):
                     os.startfile(originalPath)
+                    return
+
+                trainerExt = os.path.splitext(originalPath)[1].lower()
+
+                # Cheat tables are always opened with the configured Cheat Engine installation
+                if trainerExt in [".ct", ".cetrainer"]:
+                    ceExecutable = getCEExecutable()
+                    if not ceExecutable:
+                        self.prompt_cheat_engine_install()
+                        return
+
+                    if settings["safePath"]:
+                        ceExecutable = self.get_ascii_launch_path(ceExecutable)
+                        trainerPath = self.get_ascii_launch_path(originalPath)
+                    else:
+                        trainerPath = originalPath
+
+                    print(f"Cheat Engine launch path: {ceExecutable}")
+                    print(f"Cheat table launch path: {trainerPath}")
+                    verb = "runas" if settings["launchCTAsAdmin"] else "open"
+                    ctypes.windll.shell32.ShellExecuteW(
+                        None, verb, ceExecutable, f'"{trainerPath}"', os.path.dirname(ceExecutable), 1
+                    )
                     return
 
                 # Get a safe ASCII path to prevent legacy trainers from crashing
@@ -585,14 +632,12 @@ class GameCheatsManager(QMainWindow):
                     trainerPath = originalPath
                 print(f"Trainer launch path: {trainerPath}")
                 trainerDir = os.path.dirname(trainerPath)
-                trainerExt = os.path.splitext(originalPath)[1].lower()
 
-                # Check if Cheat Engine is installed before launching .ct/.cetrainer files
-                if trainerExt in [".ct", ".cetrainer"] and settings["showCEPrompt"] and not self.is_cheat_engine_available(trainerExt):
-                    self.prompt_cheat_engine_install()
+                # Cheat Engine has its own administrator-launch setting
+                isCheatEngine = os.path.basename(originalPath).lower() == CE_EXECUTABLE.lower()
 
-                # Use "runas" for exe files (run as admin), "open" for other files (use default app)
-                verb = "runas" if trainerExt == ".exe" else "open"
+                launchAsAdmin = settings["launchCTAsAdmin"] if isCheatEngine else settings["launchAsAdmin"]
+                verb = "runas" if launchAsAdmin and trainerExt == ".exe" else "open"
                 ctypes.windll.shell32.ShellExecuteW(
                     None, verb, trainerPath, None, trainerDir, 1
                 )
@@ -600,9 +645,9 @@ class GameCheatsManager(QMainWindow):
             print(str(e))
 
     def delete_trainer(self):
-        index = self.flingListBox.currentRow()
+        index = self.installedListBox.currentRow()
         if index != -1:
-            trainerName = self.flingListBox.item(index).text()
+            trainerName = self.installedListBox.item(index).text()
             trainerPath = self.trainers[trainerName]
 
             msg_box = QMessageBox(
@@ -630,7 +675,7 @@ class GameCheatsManager(QMainWindow):
                             shutil.rmtree(parent_dir)
                         else:
                             os.remove(trainerPath)
-                    self.flingListBox.takeItem(index)
+                    self.installedListBox.takeItem(index)
                     self.show_cheats()
                 except PermissionError as e:
                     QMessageBox.critical(self, tr("Error"), tr("Trainer is currently in use, please close any programs using the file and try again."))
@@ -658,18 +703,14 @@ class GameCheatsManager(QMainWindow):
                 self.enable_all_widgets()
                 return
 
-            self.downloadListBox.addItem(tr("Migrating existing trainers..."))
-            item = self.downloadListBox.item(self.downloadListBox.count() - 1)
-            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.on_message(tr("Migrating existing trainers..."))
             migration_thread = PathChangeThread(self.trainerDownloadPath, changedPath, self)
             migration_thread.finished.connect(self.on_migration_finished)
             migration_thread.error.connect(self.on_migration_error)
             migration_thread.start()
 
         else:
-            self.downloadListBox.addItem(tr("No path selected."))
-            item = self.downloadListBox.item(self.downloadListBox.count() - 1)
-            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.on_message(tr("No path selected."))
             self.enable_all_widgets()
             return
 
@@ -739,8 +780,19 @@ class GameCheatsManager(QMainWindow):
             trainer_update_thread.finished.connect(self.on_interval_finished)
             trainer_update_thread.start()
 
+    def run_pending_trainer_update(self):
+        """Start the interval's trainer update once no data file is still being fetched, since it reads them."""
+        dataFetchRunning = (
+            self.currentlyUpdatingGCM or self.currentlyUpdatingFling or self.currentlyUpdatingXiaoXing or
+            self.currentlyUpdatingCT or self.currentlyUpdatingTrans
+        )
+        if self.trainerUpdatePending and not dataFetchRunning:
+            self.trainerUpdatePending = False
+            self.update_trainers(True)
+
     def fetch_trainer_search_data(self):
-        self.fetch_fling_data()
+        if settings["enableFling"]:
+            self.fetch_fling_data()
         if settings["enableXiaoXing"]:
             self.fetch_xiaoxing_data()
         if settings["enableCT"]:
@@ -760,7 +812,8 @@ class GameCheatsManager(QMainWindow):
         if settings["autoUpdateCTData"]:
             self.fetch_ct_data()
         if settings["autoUpdateGCMTrainers"] or settings["autoUpdateFlingTrainers"] or settings["autoUpdateXiaoXingTrainers"] or settings["autoUpdateCTTrainers"]:
-            self.update_trainers(True)
+            self.trainerUpdatePending = True
+            self.run_pending_trainer_update()
 
     def download_trainers(self, index):
         self.enqueue_download(index, self.trainers, self.trainerDownloadPath, None)
@@ -768,7 +821,18 @@ class GameCheatsManager(QMainWindow):
     def on_trainer_update(self, update_entry):
         self.enqueue_download(None, None, self.trainerDownloadPath, update_entry)
 
+    def is_ce_download(self, index, update_entry):
+        trainer = update_entry
+        if trainer is None and index is not None and index < len(DownloadBaseThread.trainer_urls):
+            trainer = DownloadBaseThread.trainer_urls[index]
+
+        return trainer is not None and DownloadBaseThread.is_cheat_engine_package(trainer)
+
     def enqueue_download(self, index, trainers, trainerDownloadPath, update_entry):
+        # Cheat Engine can also be downloaded by searching for it or by a trainer update
+        if self.is_ce_download(index, update_entry):
+            self.downloadingCE = True
+
         self.downloadQueue.put((index, trainers, trainerDownloadPath, update_entry))
         if not self.currentlyDownloading:
             self.start_next_download()
@@ -785,7 +849,11 @@ class GameCheatsManager(QMainWindow):
             download_thread = DownloadTrainersThread(index, trainers, trainerDownloadPath, update_entry, self)
             download_thread.message.connect(self.on_message, Qt.ConnectionType.BlockingQueuedConnection)
             download_thread.messageBox.connect(self.on_message_box)
+            download_thread.ceInstalled.connect(self.on_cheat_engine_installed)
+            if self.is_ce_download(index, update_entry):
+                download_thread.finished.connect(self.on_cheat_engine_finished)
             download_thread.progress.connect(self.on_download_progress)
+            download_thread.installed.connect(self.on_trainers_installed)
             download_thread.finished.connect(self.on_download_finished)
             download_thread.start()
         else:
@@ -797,6 +865,8 @@ class GameCheatsManager(QMainWindow):
         if type == "clear":
             self.downloadListBox.clear()
             self.downloadProgressBar = None
+            self.downloadProgressLabel = None
+            self.downloadProgressItem = None
         elif type == "result":
             item = QListWidgetItem(message)
             self.downloadListBox.addItem(item)
@@ -809,6 +879,8 @@ class GameCheatsManager(QMainWindow):
             headerLayout.setContentsMargins(0, 0, 0, 0)
             headerLayout.setSpacing(10)
             label = QLabel(message)
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setWordWrap(True)
             headerLayout.addWidget(label)
             self.downloadProgressLabel = QLabel()
             self.downloadProgressLabel.setStyleSheet("color: gray;")
@@ -819,30 +891,31 @@ class GameCheatsManager(QMainWindow):
             widgetLayout.addWidget(self.downloadProgressBar)
             item = QListWidgetItem()
             item.setFlags(noSelectFlags)
-            item.setSizeHint(widget.sizeHint())
             self.downloadListBox.addItem(item)
             self.downloadListBox.setBoundedItemWidget(item, widget)
-        elif type == "success":
-            if self.downloadProgressBar:
-                self.downloadProgressBar.setComplete()
-            self.downloadProgressBar = None
-            self.downloadProgressLabel = None
-            item = QListWidgetItem(message)
-            item.setFlags(noSelectFlags)
-            item.setForeground(QColor('green'))
-            self.downloadListBox.addItem(item)
-        elif type == "failure":
-            if self.downloadProgressBar:
-                self.downloadProgressBar.setError(True)
-            self.downloadProgressBar = None
-            self.downloadProgressLabel = None
-            item = QListWidgetItem(message)
-            item.setFlags(noSelectFlags)
-            item.setForeground(QColor('red'))
-            self.downloadListBox.addItem(item)
+            self.downloadProgressItem = item
         else:
+            color = None
+            if type == "success":
+                if self.downloadProgressBar:
+                    self.downloadProgressBar.setComplete()
+                self.downloadProgressBar = None
+                self.downloadProgressLabel = None
+                self.downloadProgressItem = None
+                color = QColor("green")
+            elif type == "failure":
+                if self.downloadProgressBar:
+                    self.downloadProgressBar.setError(True)
+                self.downloadProgressBar = None
+                self.downloadProgressLabel = None
+                self.downloadProgressItem = None
+                color = QColor("red")
+
             item = QListWidgetItem(message)
             item.setFlags(noSelectFlags)
+            item.setData(WrappedMessageDelegate.WRAP_ROLE, True)
+            if color is not None:
+                item.setForeground(color)
             self.downloadListBox.addItem(item)
 
     @staticmethod
@@ -863,6 +936,8 @@ class GameCheatsManager(QMainWindow):
                 )
             else:
                 self.downloadProgressLabel.setText(self.format_size(downloaded))
+            if self.downloadProgressItem is not None:
+                self.downloadListBox.fitItemWidgetToViewport(self.downloadProgressItem)
         if self.downloadProgressBar:
             self.downloadProgressBar.setSegmentProgress(segment_data)
 
@@ -897,11 +972,21 @@ class GameCheatsManager(QMainWindow):
         self.searchable = True
         self.enable_download_widgets()
 
+    def on_cheat_engine_finished(self, status):
+        self.downloadingCE = False
+
+    def on_trainers_installed(self, trainerNames):
+        self.lastInstalledTrainers = trainerNames
+
     def on_download_finished(self, status):
         self.downloadable = False
         self.searchable = True
         self.enable_download_widgets()
         self.show_cheats()
+        # Point out what just arrived, since the list is sorted and it can land anywhere
+        if self.lastInstalledTrainers:
+            self.installedListBox.flash_items(self.lastInstalledTrainers)
+            self.lastInstalledTrainers = []
         self.currentlyDownloading = False
         self.start_next_download()
 
@@ -928,8 +1013,12 @@ class GameCheatsManager(QMainWindow):
             self.currentlyUpdatingCT = False
         elif widgetName == "translations":
             self.currentlyUpdatingTrans = False
+        elif widgetName == "appUpdate":
+            self.currentlyUpdatingApp = False
         elif widgetName == "trainerUpdate":
             self.currentlyUpdatingTrainers = False
+
+        self.run_pending_trainer_update()
 
     # ===========================================================================
     # Menu functions
@@ -943,7 +1032,7 @@ class GameCheatsManager(QMainWindow):
             self.settings_window.show()
 
     def import_files(self):
-        file_names, _ = QFileDialog.getOpenFileNames(self, tr("Select trainers you want to import"), "", "Trainer Files (*.exe *.ct)")
+        file_names, _ = QFileDialog.getOpenFileNames(self, tr("Select trainers you want to import"), "", "Trainer Files (*.exe *.ct *.cetrainer)")
         if file_names:
             for file_name in file_names:
                 try:

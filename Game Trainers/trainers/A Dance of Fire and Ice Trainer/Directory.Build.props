@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <MonoBuildRoot>$(MSBuildThisFileDirectory)..\..\build\trainers\A Dance of Fire and Ice Trainer\Mono\</MonoBuildRoot>
+    <BaseOutputPath>$(MonoBuildRoot)bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MonoBuildRoot)obj\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>

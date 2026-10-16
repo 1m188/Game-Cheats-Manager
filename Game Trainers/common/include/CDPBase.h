@@ -17,8 +17,14 @@
 #include <nlohmann/json.hpp>
 
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "user32.lib")
 
 using json = nlohmann::json;
+
+/// DevTools binds IPv4 only; connecting by name costs ~2s resolving ::1 first.
+static constexpr const wchar_t *CDP_HOST = L"127.0.0.1";
 
 /// How the game process receives the remote debugging port argument.
 enum class CDPLaunchMethod
@@ -55,7 +61,7 @@ public:
 
     std::wstring getProcessName() const
     {
-        return L"localhost:" + std::to_wstring(cdpPort_);
+        return std::wstring(CDP_HOST) + L":" + std::to_wstring(cdpPort_);
     }
 
     DWORD getProcessId() const
@@ -109,12 +115,10 @@ public:
 
         if (!lastCheckResult_)
         {
-            // During the startup grace period (e.g. waiting for Steam to finish loading
-            // the game), skip failure counting so the trainer doesn't give up early.
+            // Still booting — don't count failures against it yet.
             if (startupGraceSecs_ > 0)
             {
-                auto secsSinceLaunch = std::chrono::duration_cast<std::chrono::seconds>(
-                    now - launchTime_).count();
+                auto secsSinceLaunch = std::chrono::duration_cast<std::chrono::seconds>(now - launchTime_).count();
                 if (secsSinceLaunch < startupGraceSecs_)
                     return lastCheckResult_;
             }
@@ -147,9 +151,7 @@ public:
         if (gamePath.empty() && launchMethod_ != CDPLaunchMethod::SteamLaunchUrl)
             return false;
 
-        // cdpPort_ is loaded from settings (keyed by settingsKey_), so it reflects the
-        // port this trainer last used. Probing it first lets us reattach to an already-
-        // running instance without spawning a second process.
+        // cdpPort_ is the port we last used, so probing it reattaches to a running game.
         if (checkCDP())
         {
             gameLaunched_ = true;
@@ -172,6 +174,8 @@ public:
         PROCESS_INFORMATION pi = {};
         si.cb = sizeof(si);
 
+        // Never hand our token to the game; WebView2 also ignores the env var for elevated hosts.
+        const bool elevated = isElevated();
         bool ok = false;
 
         if (launchMethod_ == CDPLaunchMethod::WebView2EnvVar)
@@ -179,35 +183,38 @@ public:
             std::string envVal = "--remote-debugging-port=" + std::to_string(cdpPort_);
             SetEnvironmentVariableA("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", envVal.c_str());
 
-            ok = CreateProcessA(
-                gamePath.c_str(), nullptr, nullptr, nullptr, FALSE,
-                CREATE_NEW_PROCESS_GROUP, nullptr, workDir.c_str(), &si, &pi);
+            if (elevated)
+                ok = launchAsShellUser(gamePath, std::string(), workDir);
+            else
+                ok = CreateProcessA(gamePath.c_str(), nullptr, nullptr, nullptr, FALSE, CREATE_NEW_PROCESS_GROUP, nullptr, workDir.c_str(), &si, &pi);
         }
         else if (launchMethod_ == CDPLaunchMethod::CommandLineArg)
         {
             std::string cmdLine = "\"" + gamePath + "\" --remote-debugging-port=" + std::to_string(cdpPort_);
-            ok = CreateProcessA(
-                nullptr, cmdLine.data(), nullptr, nullptr, FALSE,
-                CREATE_NEW_PROCESS_GROUP, nullptr, workDir.c_str(), &si, &pi);
+
+            if (elevated)
+                ok = launchAsShellUser(gamePath, cmdLine, workDir);
+            else
+                ok = CreateProcessA(nullptr, cmdLine.data(), nullptr, nullptr, FALSE, CREATE_NEW_PROCESS_GROUP, nullptr, workDir.c_str(), &si, &pi);
         }
         else // CDPLaunchMethod::SteamLaunchUrl
         {
-            // Open steam://run/{appId}//--remote-debugging-port={port}/ so Steam passes
-            // the flag to the inner Electron process, bypassing any launcher wrapper that
-            // rejects unknown command-line arguments.
             std::string url = "steam://run/" + steamAppId_ + "//--remote-debugging-port=" + std::to_string(cdpPort_) + "/";
-            HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_HIDE);
-            ok = ((UINT_PTR)result > 32);
+
+            // The port rides in the URL, so Explorer relaying is enough to shed elevation here.
+            if (elevated)
+                ok = launchViaShell(url);
+            else
+                ok = ((UINT_PTR)ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_HIDE) > 32);
         }
 
         if (ok)
         {
-            if (launchMethod_ == CDPLaunchMethod::SteamLaunchUrl)
-            {
-                launchTime_ = std::chrono::steady_clock::now();
-                startupGraceSecs_ = 90;
-            }
-            else
+            // A large bundle can take far longer than the 3-strike budget to open its port.
+            launchTime_ = std::chrono::steady_clock::now();
+            startupGraceSecs_ = (launchMethod_ == CDPLaunchMethod::SteamLaunchUrl) ? 90 : 120;
+
+            if (pi.hProcess)
             {
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
@@ -349,8 +356,118 @@ private:
         return (dir / "GCM Settings" / (settingsKey_ + ".json")).string();
     }
 
+    /// True when this process holds an elevated (administrator) token.
+    static bool isElevated()
+    {
+        HANDLE token = nullptr;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+            return false;
+
+        TOKEN_ELEVATION elevation = {};
+        DWORD returned = 0;
+        bool elevated = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &returned) && elevation.TokenIsElevated;
+        CloseHandle(token);
+        return elevated;
+    }
+
+    /// Duplicate the desktop shell's token, at the logged-on user's level. Caller owns it.
+    static HANDLE getShellUserToken()
+    {
+        HWND shell = GetShellWindow();
+        if (!shell)
+            return nullptr;
+
+        DWORD shellPid = 0;
+        GetWindowThreadProcessId(shell, &shellPid);
+        if (!shellPid)
+            return nullptr;
+
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, shellPid);
+        if (!process)
+            return nullptr;
+
+        HANDLE shellToken = nullptr;
+        BOOL opened = OpenProcessToken(process, TOKEN_DUPLICATE, &shellToken);
+        CloseHandle(process);
+        if (!opened)
+            return nullptr;
+
+        HANDLE primary = nullptr;
+        BOOL duplicated = DuplicateTokenEx(shellToken, TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, nullptr, SecurityImpersonation, TokenPrimary, &primary);
+        CloseHandle(shellToken);
+
+        return duplicated ? primary : nullptr;
+    }
+
+    /// Launch with the desktop user's token, as the user would have. Empty commandLine runs appPath bare.
+    bool launchAsShellUser(const std::string &appPath, const std::string &commandLine, const std::string &workDir)
+    {
+        HANDLE token = getShellUserToken();
+        if (!token)
+            return false;
+
+        std::wstring appW = utf8ToWide(appPath);
+        std::wstring dirW = utf8ToWide(workDir);
+        std::wstring cmdW = commandLine.empty() ? (L"\"" + appW + L"\"") : utf8ToWide(commandLine);
+
+        // Ours, not the target user's — a null block would drop the port variable set above.
+        LPWCH environment = GetEnvironmentStringsW();
+
+        STARTUPINFOW si = {};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi = {};
+
+        BOOL created = CreateProcessWithTokenW(token, 0, appW.c_str(), &cmdW[0], CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP, environment, dirW.empty() ? nullptr : dirW.c_str(), &si, &pi);
+
+        if (environment)
+            FreeEnvironmentStringsW(environment);
+        CloseHandle(token);
+
+        if (!created)
+            return false;
+
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return true;
+    }
+
+    /// Open via Explorer, as a double-click would. Explorer supplies the environment, not us.
+    bool launchViaShell(const std::string &target)
+    {
+        std::wstring cmdW = L"explorer.exe \"" + utf8ToWide(target) + L"\"";
+
+        STARTUPINFOW si = {};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi = {};
+
+        if (!CreateProcessW(nullptr, &cmdW[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+            return false;
+
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return true;
+    }
+
+    static std::wstring utf8ToWide(const std::string &text)
+    {
+        if (text.empty())
+            return std::wstring();
+
+        int needed = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0);
+        std::wstring wide(needed, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), &wide[0], needed);
+        return wide;
+    }
+
     int findFreePort(int startPort)
     {
+        // Nothing else here touches Winsock, so socket() would fail with WSANOTINITIALISED.
+        WSADATA wsaData = {};
+        bool wsaOk = (WSAStartup(MAKEWORD(2, 2), &wsaData) == 0);
+        if (!wsaOk)
+            return startPort;
+
+        int chosen = startPort;
         for (int port = startPort; port < startPort + 100; ++port)
         {
             SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -366,9 +483,14 @@ private:
             closesocket(sock);
 
             if (result == 0)
-                return port;
+            {
+                chosen = port;
+                break;
+            }
         }
-        return startPort;
+
+        WSACleanup();
+        return chosen;
     }
 
     // ============================================================
@@ -381,13 +503,15 @@ private:
         if (!hSession)
             return false;
 
-        DWORD connectTimeout = 200;
-        DWORD ioTimeout = 300;
+        DWORD connectTimeout = 500;
+        DWORD ioTimeout = 1000;
+        DWORD connectRetries = 1; // WinHTTP otherwise retries a refused connect, stalling the UI ~2s
+        WinHttpSetOption(hSession, WINHTTP_OPTION_CONNECT_RETRIES, &connectRetries, sizeof(connectRetries));
         WinHttpSetOption(hSession, WINHTTP_OPTION_CONNECT_TIMEOUT, &connectTimeout, sizeof(connectTimeout));
         WinHttpSetOption(hSession, WINHTTP_OPTION_RECEIVE_TIMEOUT, &ioTimeout, sizeof(ioTimeout));
         WinHttpSetOption(hSession, WINHTTP_OPTION_SEND_TIMEOUT, &ioTimeout, sizeof(ioTimeout));
 
-        HINTERNET hConnect = WinHttpConnect(hSession, L"localhost", (INTERNET_PORT)cdpPort_, 0);
+        HINTERNET hConnect = WinHttpConnect(hSession, CDP_HOST, (INTERNET_PORT)cdpPort_, 0);
         if (!hConnect)
         {
             WinHttpCloseHandle(hSession);
@@ -426,12 +550,12 @@ private:
         if (!hSession)
             return "";
 
-        DWORD timeout = 500;
+        DWORD timeout = 2000;
         WinHttpSetOption(hSession, WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
         WinHttpSetOption(hSession, WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
         WinHttpSetOption(hSession, WINHTTP_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
 
-        HINTERNET hConnect = WinHttpConnect(hSession, L"localhost", (INTERNET_PORT)cdpPort_, 0);
+        HINTERNET hConnect = WinHttpConnect(hSession, CDP_HOST, (INTERNET_PORT)cdpPort_, 0);
         if (!hConnect)
         {
             WinHttpCloseHandle(hSession);
@@ -562,13 +686,13 @@ private:
         if (!wsSession_)
             return false;
 
-        DWORD connectTimeout = 500;
+        DWORD connectTimeout = 2000;
         DWORD sendRecvTimeout = 3000;
         WinHttpSetOption(wsSession_, WINHTTP_OPTION_CONNECT_TIMEOUT, &connectTimeout, sizeof(connectTimeout));
         WinHttpSetOption(wsSession_, WINHTTP_OPTION_RECEIVE_TIMEOUT, &sendRecvTimeout, sizeof(sendRecvTimeout));
         WinHttpSetOption(wsSession_, WINHTTP_OPTION_SEND_TIMEOUT, &sendRecvTimeout, sizeof(sendRecvTimeout));
 
-        wsConnect_ = WinHttpConnect(wsSession_, L"localhost", (INTERNET_PORT)cdpPort_, 0);
+        wsConnect_ = WinHttpConnect(wsSession_, CDP_HOST, (INTERNET_PORT)cdpPort_, 0);
         if (!wsConnect_)
         {
             wsDisconnect();
