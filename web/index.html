@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FLiNG 修改器搜索 · Game Cheats Manager（纯静态版）</title>
+  <meta name="description" content="风灵月影（FLiNG）游戏修改器离线搜索与官方下载直通——纯静态前端，无后端依赖">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <h1>FLiNG 修改器搜索</h1>
+      <p class="subtitle">风灵月影游戏修改器 · 离线索引搜索 · 一键打开官方下载页</p>
+      <div id="index-meta" class="meta"></div>
+    </div>
+  </header>
+
+  <main class="main">
+    <div class="search-row">
+      <input id="search-input" type="search" autocomplete="off" spellcheck="false"
+             placeholder="输入游戏英文名，例如 Dredge、Elden Ring、PvZ 2…" aria-label="搜索游戏修改器">
+      <span class="shortcuts"><kbd>/</kbd> 聚焦 <kbd>Esc</kbd> 清空</span>
+    </div>
+    <div id="status" class="status"></div>
+    <section id="results" class="results" aria-live="polite"></section>
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      索引数据于构建时解析自
+      <a href="https://flingtrainer.com/all-trainers/" target="_blank" rel="noopener noreferrer">flingtrainer.com</a>
+      与 <a href="https://archive.flingtrainer.com/" target="_blank" rel="noopener noreferrer">archive.flingtrainer.com</a>，仅存于本页面；
+      下载动作将直接打开 FLiNG 官方页面完成，下载文件请自行留意杀毒软件提示。<br>
+      数据刷新：<code>npm run build:index</code>（web 目录内）· 解析与搜索规则对齐 <code>go/internal/fling</code> 版本
+    </p>
+  </footer>
+
+  <!-- 加载顺序不可调换: 依赖依次为 数据 → 内核 → 增量刷新 → UI（classic script，无 module，兼容 file://） -->
+  <script src="data/trainers-data.js"></script>
+  <script src="assets/search.js"></script>
+  <script src="assets/refresh.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>

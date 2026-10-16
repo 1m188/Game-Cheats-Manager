@@ -1,0 +1,210 @@
+/* FLiNG 修改器搜索 —— 纯静态样式（深色主题） */
+
+:root {
+  --bg: #101317;
+  --bg-elev: #171b21;
+  --bg-card: #1c212b;
+  --border: #2a3140;
+  --text: #e6e9ef;
+  --text-muted: #98a2b3;
+  --accent: #ff9a3c;
+  --accent-strong: #ff8a1f;
+  --badge-main: #2c7a4b;
+  --badge-archive: #7a5c2c;
+  --error: #ff6b6b;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 500px at 15% -10%, rgba(255, 154, 60, 0.08), transparent 60%),
+    radial-gradient(900px 420px at 85% -15%, rgba(70, 120, 255, 0.07), transparent 55%),
+    var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+}
+
+.site-header {
+  padding: 40px 16px 12px;
+  text-align: center;
+}
+
+.header-inner h1 {
+  margin: 0 0 6px;
+  font-size: 30px;
+  letter-spacing: 1px;
+  background: linear-gradient(92deg, #ffb465, #ff8a1f 55%, #ffd08a);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.subtitle {
+  margin: 0 0 14px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.meta {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pill {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev);
+  color: var(--text);
+}
+
+.pill.muted { color: var(--text-muted); }
+
+.main {
+  max-width: 900px;
+  margin: 26px auto 40px;
+  padding: 0 16px;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+#search-input {
+  flex: 1;
+  font-size: 16px;
+  padding: 13px 16px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#search-input:focus {
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 3px rgba(255, 138, 31, 0.18);
+}
+
+#search-input::placeholder { color: #6b7280; }
+
+.shortcuts {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--bg-elev);
+  font-size: 11px;
+}
+
+.status {
+  margin: 14px 2px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.status .count b { color: var(--accent); font-size: 15px; }
+
+.status .error {
+  color: var(--error);
+}
+
+.status code {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: Consolas, "Courier New", monospace;
+}
+
+.results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-strong);
+  background: #202634;
+}
+
+.card-name {
+  flex: 1;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: #fff;
+}
+
+.badge-main { background: var(--badge-main); }
+.badge-archive { background: var(--badge-archive); }
+
+.card-open {
+  color: var(--accent);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 18px 16px 30px;
+  text-align: center;
+  color: #7c8698;
+  font-size: 12px;
+}
+
+.site-footer a { color: #a8b3c4; }
+.site-footer code {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+@media (max-width: 600px) {
+  .shortcuts { display: none; }
+  .site-header { padding-top: 28px; }
+  .header-inner h1 { font-size: 24px; }
+  .results { grid-template-columns: 1fr; }
+}

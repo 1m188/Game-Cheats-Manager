@@ -1,0 +1,15 @@
+{
+  "name": "game-cheats-manager-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "FLiNG（风灵月影）修改器搜索与下载 —— Game-Cheats-Manager 纯静态 Web 版（无任何 npm 依赖）",
+  "scripts": {
+    "build:index": "node scripts/build-index.mjs",
+    "verify": "node scripts/verify-data.mjs",
+    "start": "node scripts/serve.mjs",
+    "serve": "node scripts/serve.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
