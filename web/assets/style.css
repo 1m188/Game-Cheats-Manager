@@ -73,7 +73,7 @@ body {
 .pill.muted { color: var(--text-muted); }
 
 .main {
-  max-width: 900px;
+  max-width: 1020px;
   margin: 26px auto 40px;
   padding: 0 16px;
 }
@@ -138,35 +138,38 @@ kbd {
   font-family: Consolas, "Courier New", monospace;
 }
 
+/* 结果列表: 整行一条,长名称不折行(超出省略号+title悬浮完整名) */
 .results {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 14px;
+  padding: 9px 16px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 8px;
   color: var(--text);
   text-decoration: none;
-  transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
 .card:hover {
-  transform: translateY(-2px);
   border-color: var(--accent-strong);
   background: #202634;
 }
 
 .card-name {
   flex: 1;
+  min-width: 0;
   font-size: 14px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .badge {
@@ -206,5 +209,6 @@ kbd {
   .shortcuts { display: none; }
   .site-header { padding-top: 28px; }
   .header-inner h1 { font-size: 24px; }
-  .results { grid-template-columns: 1fr; }
+  .card { gap: 10px; }
+  .card-open { display: none; }  /* 窄屏隐藏文字入口,保留徽章与整卡可点 */
 }
